@@ -922,7 +922,8 @@ namespace rtsp_stream {
     std::stringstream ss;
 
     // Tell the client about our supported features
-    ss << "a=x-ss-general.featureFlags:" << (uint32_t) platf::get_capabilities() << std::endl;
+    ss << "a=x-ss-general.featureFlags:"
+       << ((uint32_t) platf::get_capabilities() | LI_FF_ADAPTIVE_BITRATE) << std::endl;
 
     // Always request new control stream encryption if the client supports it
     uint32_t encryption_flags_supported = SS_ENC_CONTROL_V2 | SS_ENC_AUDIO;
@@ -1246,6 +1247,8 @@ namespace rtsp_stream {
       BOOST_LOG(info) << "Client requested continuous audio"sv;
       config.audio.flags[audio::config_t::CONTINUOUS_AUDIO] = true;
     }
+
+    config.configuredBitrateKbps = configuredBitrateKbps ? configuredBitrateKbps : config.monitor.bitrate;
 
     // If the client sent a configured bitrate, we will choose the actual bitrate ourselves
     // by using FEC percentage and audio quality settings. If the calculated bitrate ends up

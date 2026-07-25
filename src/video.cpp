@@ -605,6 +605,7 @@ namespace video {
     safe::mail_raw_t::event_t<bool> shutdown_event;  ///< Event raised when the stream should shut down.
     safe::mail_raw_t::queue_t<packet_t> packets;  ///< Queue receiving encoded video packets for the stream sender.
     safe::mail_raw_t::event_t<bool> idr_events;  ///< Event raised when an IDR frame is requested.
+    safe::mail_raw_t::event_t<config_t> video_config_events;  ///< Event carrying live adaptive quality changes.
     safe::mail_raw_t::event_t<hdr_info_t> hdr_events;  ///< Event carrying updated HDR metadata.
     safe::mail_raw_t::event_t<input::touch_port_t> touch_port_events;  ///< Event carrying updated touch viewport metadata.
 
@@ -2389,6 +2390,7 @@ namespace video {
     auto packets = mail::man->queue<packet_t>(mail::video_packets);
     auto idr_events = mail->event<bool>(mail::idr);
     auto invalidate_ref_frames_events = mail->event<std::pair<int64_t, int64_t>>(mail::invalidate_ref_frames);
+    auto video_config_events = mail->event<config_t>(mail::video_config);
 
     {
       // Load a dummy image into the AVFrame to ensure we have something to encode
@@ -2444,7 +2446,8 @@ namespace video {
       //
       // Ensure that this check occurs as close as possible to the encode call to prevent packets
       // in flight after encoder teardown.
-      if (shutdown_event->peek() || !images->running() || (reinit_event.peek() && frame_nr > 1)) {
+      if (shutdown_event->peek() || !images->running() || video_config_events->peek() ||
+          (reinit_event.peek() && frame_nr > 1)) {
         break;
       }
 
@@ -2724,6 +2727,21 @@ namespace video {
             continue;
           }
 
+          if (ctx->video_config_events->peek()) {
+            auto requestedConfig = ctx->video_config_events->pop(0ms);
+            if (requestedConfig) {
+              ctx->config = *requestedConfig;
+              auto replacement = make_synced_session(disp.get(), encoder, *img, *ctx);
+              if (!replacement) {
+                BOOST_LOG(error) << "Could not recreate encoder for adaptive quality change"sv;
+                ctx->shutdown_event->raise(true);
+                continue;
+              }
+              replacement->session->request_idr_frame();
+              *pos = std::move(*replacement);
+            }
+          }
+
           if (ctx->idr_events->peek()) {
             pos->session->request_idr_frame();
             ctx->idr_events->pop();
@@ -2852,7 +2870,13 @@ namespace video {
     // Encoding takes place on this thread
     platf::adjust_thread_priority(platf::thread_priority_e::high);
 
+    auto video_config_events = mail->event<config_t>(mail::video_config);
     while (!shutdown_event->peek() && images->running()) {
+      if (auto requestedConfig = video_config_events->pop(0ms)) {
+        config = *requestedConfig;
+        mail->event<bool>(mail::idr)->raise(true);
+      }
+
       // Wait for the main capture event when the display is being reinitialized
       if (ref->reinit_event.peek()) {
         std::this_thread::sleep_for(20ms);
@@ -2929,6 +2953,7 @@ namespace video {
         mail->event<bool>(mail::shutdown),
         mail::man->queue<packet_t>(mail::video_packets),
         std::move(idr_events),
+        mail->event<config_t>(mail::video_config),
         mail->event<hdr_info_t>(mail::hdr),
         mail->event<input::touch_port_t>(mail::touch_port),
         config,

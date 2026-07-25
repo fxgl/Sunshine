@@ -6,6 +6,7 @@
 
 // standard includes
 #include <utility>
+#include <string_view>
 
 // lib includes
 #include <boost/asio.hpp>
@@ -14,6 +15,10 @@
 #include "audio.h"
 #include "crypto.h"
 #include "video.h"
+
+namespace rtsp_stream {
+  struct launch_session_t;
+}
 
 namespace stream {
   constexpr auto VIDEO_STREAM_PORT = 9;  ///< GameStream base-port offset used for the video UDP stream.
@@ -29,6 +34,7 @@ namespace stream {
     audio::config_t audio;  ///< Audio capture configuration for the stream.
     video::config_t monitor;  ///< Video capture and encoder configuration for the selected monitor.
 
+    int configuredBitrateKbps;  ///< Client-selected total bitrate ceiling before protocol overhead adjustments.
     int packetsize;  ///< Maximum payload size for network packets.
     int minRequiredFecPackets;  ///< Minimum recovery packets required before FEC is emitted.
     int mlFeatureFlags;  ///< Moonlight feature flags negotiated for this session.
@@ -40,6 +46,14 @@ namespace stream {
 
     std::optional<int> gcmap;  ///< Optional game-controller mapping override from the launch request.
   };
+
+  /**
+   * @brief Validate and convert a Moonlight adaptive-quality control payload.
+   * @param config Original negotiated stream configuration and quality ceilings.
+   * @param payload Raw SS_ADAPTIVE_STREAM_CONFIG payload.
+   * @return Updated encoder configuration, or std::nullopt when the request is invalid.
+   */
+  std::optional<video::config_t> make_adaptive_video_config(const config_t &config, std::string_view payload);
 
   namespace session {
     /**

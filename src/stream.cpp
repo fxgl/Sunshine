@@ -82,6 +82,35 @@ using namespace std::literals;
 
 namespace stream {
 
+  std::optional<video::config_t> make_adaptive_video_config(const config_t &config, std::string_view payload) {
+    if (payload.size() != sizeof(SS_ADAPTIVE_STREAM_CONFIG) || config.configuredBitrateKbps <= 0) {
+      return std::nullopt;
+    }
+
+    SS_ADAPTIVE_STREAM_CONFIG request;
+    std::memcpy(&request, payload.data(), sizeof(request));
+    const auto requestedBitrate = util::endian::little(request.bitrateKbps);
+    const auto requestedWidth = util::endian::little(request.width);
+    const auto requestedHeight = util::endian::little(request.height);
+
+    if (requestedBitrate < 500 || requestedBitrate > (uint32_t) config.configuredBitrateKbps ||
+        requestedWidth < 320 || requestedHeight < 180 ||
+        requestedWidth > (uint32_t) config.monitor.width ||
+        requestedHeight > (uint32_t) config.monitor.height ||
+        (requestedWidth & 1) || (requestedHeight & 1)) {
+      return std::nullopt;
+    }
+
+    auto nextConfig = config.monitor;
+    nextConfig.width = requestedWidth;
+    nextConfig.height = requestedHeight;
+    nextConfig.bitrate = (int) std::max<std::int64_t>(
+      500,
+      (std::int64_t) requestedBitrate * config.monitor.bitrate / config.configuredBitrateKbps
+    );
+    return nextConfig;
+  }
+
   /**
    * @brief Enumerates supported socket options.
    */
@@ -1256,6 +1285,24 @@ namespace stream {
         << "lastFrame [" << lastFrame << ']';
 
       session->video.invalidate_ref_frames_events->raise(std::make_pair(firstFrame, lastFrame));
+    });
+
+    server->map(SS_ADAPTIVE_STREAM_CONFIG_PTYPE, [&](session_t *session, const std::string_view &payload) {
+      if (!(session->config.mlFeatureFlags & ML_FF_ADAPTIVE_BITRATE)) {
+        BOOST_LOG(warning) << "Ignoring adaptive quality request from a client that did not negotiate support"sv;
+        return;
+      }
+      auto nextConfig = make_adaptive_video_config(session->config, payload);
+      if (!nextConfig) {
+        BOOST_LOG(warning) << "Ignoring invalid adaptive quality request"sv;
+        return;
+      }
+
+      BOOST_LOG(info)
+        << "Applying adaptive stream quality: "sv
+        << nextConfig->width << 'x' << nextConfig->height << " at "sv
+        << nextConfig->bitrate << " kbps encoder bitrate"sv;
+      session->mail->event<video::config_t>(mail::video_config)->raise(*nextConfig);
     });
 
     server->map(packetTypes[IDX_INPUT_DATA], [&](session_t *session, const std::string_view &payload) {
