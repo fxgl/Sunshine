@@ -47,6 +47,36 @@ TEST(ConcatAndInsertTests, ConcatSmallStrideTest) {
   ASSERT_EQ(res, expected);
 }
 
+TEST(HostDisplayControlTest, SerializesDisplayList) {
+  const auto payload = stream::make_host_display_list_payload({"Display A", "Display B"}, 1);
+
+  ASSERT_EQ(payload.size(), 4 + 2 + 9 + 2 + 9);
+  const auto *bytes = reinterpret_cast<const std::uint8_t *>(payload.data());
+  EXPECT_EQ(bytes[0], 1);
+  EXPECT_EQ(bytes[1], 0);
+  EXPECT_EQ(bytes[2], 2);
+  EXPECT_EQ(bytes[3], 0);
+  EXPECT_EQ(bytes[4], 9);
+  EXPECT_EQ(payload.substr(6, 9), "Display A");
+}
+
+TEST(HostDisplayControlTest, RejectsOversizedDisplayList) {
+  EXPECT_TRUE(stream::make_host_display_list_payload({std::string(16 * 1024, 'x')}, 0).empty());
+}
+
+TEST(HostDisplayControlTest, ParsesValidSwitch) {
+  const char payload[] = {1, 0};
+  const auto index = stream::parse_host_display_switch(std::string_view(payload, sizeof(payload)), 2);
+  ASSERT_TRUE(index);
+  EXPECT_EQ(*index, 1);
+}
+
+TEST(HostDisplayControlTest, RejectsInvalidSwitch) {
+  const char out_of_range[] = {2, 0};
+  EXPECT_FALSE(stream::parse_host_display_switch(std::string_view(out_of_range, sizeof(out_of_range)), 2));
+  EXPECT_FALSE(stream::parse_host_display_switch(std::string_view("\0", 1), 2));
+}
+
 namespace {
   std::string adaptive_quality_payload(std::uint32_t bitrate, std::uint16_t width, std::uint16_t height) {
     SS_ADAPTIVE_STREAM_CONFIG request {

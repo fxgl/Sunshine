@@ -55,6 +55,12 @@ namespace stream {
    */
   std::optional<video::config_t> make_adaptive_video_config(const config_t &config, std::string_view payload);
 
+  /** Encode the host display list for Moonlight's control-channel extension. */
+  std::string make_host_display_list_payload(const std::vector<std::string> &display_names, int current_display);
+
+  /** Validate and decode a requested host display index. */
+  std::optional<std::uint16_t> parse_host_display_switch(std::string_view payload, std::size_t display_count);
+
   namespace session {
     /**
      * @brief Enumerates supported state options.

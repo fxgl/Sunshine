@@ -923,7 +923,7 @@ namespace rtsp_stream {
 
     // Tell the client about our supported features
     ss << "a=x-ss-general.featureFlags:"
-       << ((uint32_t) platf::get_capabilities() | LI_FF_ADAPTIVE_BITRATE) << std::endl;
+       << ((uint32_t) platf::get_capabilities() | LI_FF_ADAPTIVE_BITRATE | LI_FF_LIVE_DISPLAY_SWITCH) << std::endl;
 
     // Always request new control stream encryption if the client supports it
     uint32_t encryption_flags_supported = SS_ENC_CONTROL_V2 | SS_ENC_AUDIO;

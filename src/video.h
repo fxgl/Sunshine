@@ -6,7 +6,9 @@
 
 // standard includes
 #include <chrono>
+#include <string>
 #include <string_view>
+#include <vector>
 
 // local includes
 #include "input.h"
@@ -22,6 +24,17 @@ extern "C" {
 struct AVPacket;
 
 namespace video {
+
+  struct display_list_t {
+    std::vector<std::string> names;
+    int current_index;
+  };
+
+  /** Enumerate displays compatible with the active encoder. */
+  display_list_t get_display_list();
+
+  /** Validate and enqueue a live display switch. */
+  bool switch_display(int display_index);
 
   /**
    * @brief Encoding configuration requested by a remote client.

@@ -1419,6 +1419,7 @@ namespace video {
   };
 
   static encoder_t *chosen_encoder;
+  static std::atomic<int> active_display_index {-1};
   int active_hevc_mode;  ///< HEVC mode selected by the most recent encoder probe.
   int active_av1_mode;  ///< AV1 mode selected by the most recent encoder probe.
   bool last_encoder_probe_supported_ref_frames_invalidation = false;  ///< Whether the last probe found reference-frame invalidation support.
@@ -1500,6 +1501,30 @@ namespace video {
     }
   }
 
+  display_list_t get_display_list() {
+    if (!chosen_encoder || !chosen_encoder->platform_formats) {
+      return {{}, -1};
+    }
+
+    auto names = platf::display_names(chosen_encoder->platform_formats->dev_type);
+    auto current = active_display_index.load(std::memory_order_relaxed);
+    if (current < 0 || current >= static_cast<int>(names.size())) {
+      refresh_displays(chosen_encoder->platform_formats->dev_type, names, current);
+    }
+    return {std::move(names), current};
+  }
+
+  bool switch_display(int display_index) {
+    const auto displays = get_display_list();
+    if (display_index < 0 || display_index >= static_cast<int>(displays.names.size())) {
+      return false;
+    }
+
+    active_display_index.store(display_index, std::memory_order_relaxed);
+    mail::man->event<int>(mail::switch_display)->raise(display_index);
+    return true;
+  }
+
   /**
    * @brief Run the shared display capture thread for asynchronous encoding.
    *
@@ -1542,6 +1567,7 @@ namespace video {
     std::vector<std::string> display_names;
     int display_p = -1;
     refresh_displays(encoder.platform_formats->dev_type, display_names, display_p);
+    active_display_index.store(display_p, std::memory_order_relaxed);
     auto disp = platf::display(encoder.platform_formats->dev_type, display_names[display_p], capture_ctxs.front().config);
     if (!disp) {
       return;
@@ -1736,6 +1762,7 @@ namespace video {
               if (switch_display_event->peek()) {
                 display_p = std::clamp(*switch_display_event->pop(), 0, static_cast<int>(display_names.size()) - 1);
               }
+              active_display_index.store(display_p, std::memory_order_relaxed);
 
               // reset_display() will sleep between retries
               reset_display(disp, encoder.platform_formats->dev_type, display_names[display_p], capture_ctxs.front().config);
@@ -2662,6 +2689,7 @@ namespace video {
       if (switch_display_event->peek()) {
         display_p = std::clamp(*switch_display_event->pop(), 0, static_cast<int>(display_names.size()) - 1);
       }
+      active_display_index.store(display_p, std::memory_order_relaxed);
 
       // reset_display() will sleep between retries
       reset_display(disp, encoder.platform_formats->dev_type, display_names[display_p], synced_session_ctxs.front()->config);

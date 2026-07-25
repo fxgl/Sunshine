@@ -6,6 +6,7 @@
 // standard includes
 #include <fstream>
 #include <future>
+#include <limits>
 #include <queue>
 
 // lib includes
@@ -109,6 +110,50 @@ namespace stream {
       (std::int64_t) requestedBitrate * config.monitor.bitrate / config.configuredBitrateKbps
     );
     return nextConfig;
+  }
+
+  std::string make_host_display_list_payload(const std::vector<std::string> &display_names, int current_display) {
+    if (display_names.size() > UINT16_MAX) {
+      return {};
+    }
+
+    std::size_t payload_size = sizeof(std::uint16_t) * 2;
+    for (const auto &name : display_names) {
+      if (name.size() > UINT16_MAX || payload_size + sizeof(std::uint16_t) + name.size() > 16 * 1024) {
+        return {};
+      }
+      payload_size += sizeof(std::uint16_t) + name.size();
+    }
+
+    std::string payload(payload_size, '\0');
+    auto *cursor = reinterpret_cast<std::uint8_t *>(payload.data());
+    const std::uint16_t selected = current_display >= 0 && current_display < static_cast<int>(display_names.size()) ?
+                                     static_cast<std::uint16_t>(current_display) :
+                                     std::numeric_limits<std::uint16_t>::max();
+    const auto selected_le = util::endian::little(selected);
+    const auto count_le = util::endian::little(static_cast<std::uint16_t>(display_names.size()));
+    std::memcpy(cursor, &selected_le, sizeof(selected_le));
+    cursor += sizeof(selected_le);
+    std::memcpy(cursor, &count_le, sizeof(count_le));
+    cursor += sizeof(count_le);
+    for (const auto &name : display_names) {
+      const auto length_le = util::endian::little(static_cast<std::uint16_t>(name.size()));
+      std::memcpy(cursor, &length_le, sizeof(length_le));
+      cursor += sizeof(length_le);
+      std::memcpy(cursor, name.data(), name.size());
+      cursor += name.size();
+    }
+    return payload;
+  }
+
+  std::optional<std::uint16_t> parse_host_display_switch(std::string_view payload, std::size_t display_count) {
+    if (payload.size() != sizeof(std::uint16_t)) {
+      return std::nullopt;
+    }
+    std::uint16_t index;
+    std::memcpy(&index, payload.data(), sizeof(index));
+    index = util::endian::little(index);
+    return index < display_count ? std::optional<std::uint16_t>(index) : std::nullopt;
   }
 
   /**
@@ -1164,6 +1209,34 @@ namespace stream {
     return 0;
   }
 
+  int send_host_display_list(session_t *session) {
+    if (!session->control.peer || !(session->config.mlFeatureFlags & ML_FF_LIVE_DISPLAY_SWITCH)) {
+      return -1;
+    }
+
+    const auto displays = video::get_display_list();
+    const auto display_payload = make_host_display_list_payload(displays.names, displays.current_index);
+    if (display_payload.empty() && !displays.names.empty()) {
+      return -1;
+    }
+
+    std::string plaintext(sizeof(control_header_v2) + display_payload.size(), '\0');
+    auto *header = reinterpret_cast<control_header_v2 *>(plaintext.data());
+    header->type = util::endian::little<std::uint16_t>(SS_HOST_DISPLAY_LIST_PTYPE);
+    header->payloadLength = util::endian::little<std::uint16_t>(static_cast<std::uint16_t>(display_payload.size()));
+    std::copy(display_payload.begin(), display_payload.end(), reinterpret_cast<char *>(header->payload()));
+
+    constexpr std::size_t max_plaintext_size = sizeof(control_header_v2) + 16 * 1024;
+    std::array<std::uint8_t, sizeof(control_encrypted_t) + crypto::cipher::round_to_pkcs7_padded(max_plaintext_size) + crypto::cipher::tag_size>
+      encrypted_payload;
+    const auto payload = encode_control(session, plaintext, encrypted_payload);
+    if (payload.empty() || session->broadcast_ref->control_server.send(payload, session->control.peer)) {
+      BOOST_LOG(warning) << "Couldn't send display list to Moonlight client"sv;
+      return -1;
+    }
+    return 0;
+  }
+
   /**
    * @brief Handle an input packet that may be a clipboard focus notification.
    * @param session Active streaming session.
@@ -1303,6 +1376,31 @@ namespace stream {
         << nextConfig->width << 'x' << nextConfig->height << " at "sv
         << nextConfig->bitrate << " kbps encoder bitrate"sv;
       session->mail->event<video::config_t>(mail::video_config)->raise(*nextConfig);
+    });
+
+    server->map(SS_HOST_DISPLAY_LIST_PTYPE, [&](session_t *session, const std::string_view &payload) {
+      if (!(session->config.mlFeatureFlags & ML_FF_LIVE_DISPLAY_SWITCH) || !payload.empty()) {
+        BOOST_LOG(warning) << "Ignoring invalid host display list request"sv;
+        return;
+      }
+      send_host_display_list(session);
+    });
+
+    server->map(SS_HOST_DISPLAY_SWITCH_PTYPE, [&](session_t *session, const std::string_view &payload) {
+      if (!(session->config.mlFeatureFlags & ML_FF_LIVE_DISPLAY_SWITCH)) {
+        BOOST_LOG(warning) << "Ignoring display switch from a client that did not negotiate support"sv;
+        return;
+      }
+
+      const auto displays = video::get_display_list();
+      const auto display_index = parse_host_display_switch(payload, displays.names.size());
+      if (!display_index || !video::switch_display(*display_index)) {
+        BOOST_LOG(warning) << "Ignoring invalid host display switch request"sv;
+        return;
+      }
+
+      BOOST_LOG(info) << "Switching streamed display to index "sv << *display_index;
+      send_host_display_list(session);
     });
 
     server->map(packetTypes[IDX_INPUT_DATA], [&](session_t *session, const std::string_view &payload) {
