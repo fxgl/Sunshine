@@ -152,6 +152,14 @@ namespace platf {
     return caps;
   }
 
+  std::optional<std::string> get_clipboard_text() {
+    return std::nullopt;
+  }
+
+  bool set_clipboard_text(const std::string &text) {
+    return false;
+  }
+
   util::point_t get_mouse_loc(input_t &input) {
     auto raw = (input_raw_t *) input.get();
     return platf::mouse::get_location(raw);

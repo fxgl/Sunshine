@@ -17,6 +17,7 @@
 #include <Windows.h>
 
 // standard includes
+#include <algorithm>
 #include <cmath>
 #include <thread>
 #include <vector>
@@ -31,6 +32,7 @@
 #include "src/globals.h"
 #include "src/logging.h"
 #include "src/platform/common.h"
+#include "utf_utils.h"
 
 namespace platf {
   using namespace std::literals;
@@ -1834,7 +1836,7 @@ namespace platf {
    * @return Capability flags.
    */
   platform_caps::caps_t get_capabilities() {
-    platform_caps::caps_t caps = 0;
+    platform_caps::caps_t caps = platform_caps::clipboard_sync;
 
     // We support controller touchpad input as long as we're not emulating X360
     if (config::input.gamepad != "x360"sv) {
@@ -1851,5 +1853,62 @@ namespace platf {
     }
 
     return caps;
+  }
+
+  std::optional<std::string> get_clipboard_text() {
+    if (!OpenClipboard(nullptr)) {
+      return std::nullopt;
+    }
+
+    const HANDLE handle = GetClipboardData(CF_UNICODETEXT);
+    if (!handle) {
+      CloseClipboard();
+      return std::nullopt;
+    }
+
+    const auto *wide_text = static_cast<const wchar_t *>(GlobalLock(handle));
+    if (!wide_text) {
+      CloseClipboard();
+      return std::nullopt;
+    }
+
+    std::string text = utf_utils::to_utf8(std::wstring {wide_text});
+    GlobalUnlock(handle);
+    CloseClipboard();
+    return text;
+  }
+
+  bool set_clipboard_text(const std::string &text) {
+    const std::wstring wide_text = utf_utils::from_utf8(text);
+    if (!text.empty() && wide_text.empty()) {
+      return false;
+    }
+
+    const SIZE_T size = (wide_text.size() + 1) * sizeof(wchar_t);
+    HGLOBAL handle = GlobalAlloc(GMEM_MOVEABLE, size);
+    if (!handle) {
+      return false;
+    }
+
+    auto *buffer = static_cast<wchar_t *>(GlobalLock(handle));
+    if (!buffer) {
+      GlobalFree(handle);
+      return false;
+    }
+    std::copy(wide_text.begin(), wide_text.end(), buffer);
+    buffer[wide_text.size()] = L'\0';
+    GlobalUnlock(handle);
+
+    if (!OpenClipboard(nullptr)) {
+      GlobalFree(handle);
+      return false;
+    }
+
+    const bool succeeded = EmptyClipboard() && SetClipboardData(CF_UNICODETEXT, handle);
+    CloseClipboard();
+    if (!succeeded) {
+      GlobalFree(handle);
+    }
+    return succeeded;
   }
 }  // namespace platf

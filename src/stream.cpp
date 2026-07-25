@@ -49,6 +49,8 @@ constexpr int IDX_RUMBLE_TRIGGER_DATA = 12;  ///< Control-stream message index f
 constexpr int IDX_SET_MOTION_EVENT = 13;  ///< Control-stream message index for set motion event.
 constexpr int IDX_SET_RGB_LED = 14;  ///< Control-stream message index for set rgb led.
 constexpr int IDX_SET_ADAPTIVE_TRIGGERS = 15;  ///< Control-stream message index for set adaptive triggers.
+constexpr int IDX_CLIPBOARD_TEXT = 16;  ///< Control-stream message index for clipboard text.
+constexpr std::size_t MAX_CLIPBOARD_TEXT_SIZE = 60 * 1024;  ///< Maximum UTF-8 clipboard payload that fits encrypted control packets.
 
 static const short packetTypes[] = {
   0x0305,  // Start A
@@ -67,6 +69,7 @@ static const short packetTypes[] = {
   0x5501,  // Set motion event (Sunshine protocol extension)
   0x5502,  // Set RGB LED (Sunshine protocol extension)
   0x5503,  // Set Adaptive triggers (Sunshine protocol extension)
+  0x5504,  // Clipboard text (Sunshine protocol extension)
 };
 
 namespace asio = boost::asio;
@@ -532,6 +535,8 @@ namespace stream {
 
       platf::feedback_queue_t feedback_queue;
       safe::mail_raw_t::event_t<video::hdr_info_t> hdr_queue;
+      std::optional<std::string> clipboard_focus_snapshot;  ///< Host clipboard captured when Moonlight gained focus.
+      bool clipboard_focus_tracking {};  ///< Whether a focus interval is currently being tracked.
     } control;  ///< Runtime state for the encrypted GameStream control channel.
 
     std::uint32_t launch_session_id;  ///< RTSP launch-session ID associated with this stream.
@@ -1102,6 +1107,105 @@ namespace stream {
   }
 
   /**
+   * @brief Send UTF-8 clipboard text to a compatible Moonlight client.
+   * @param session Active streaming session.
+   * @param text Clipboard text to publish.
+   * @return 0 on success; nonzero when the message cannot be sent.
+   */
+  int send_clipboard_text(session_t *session, const std::string_view text) {
+    if (!session->control.peer || !(session->config.mlFeatureFlags & ML_FF_CLIPBOARD_SYNC) || text.size() > MAX_CLIPBOARD_TEXT_SIZE) {
+      return -1;
+    }
+
+    std::string plaintext(sizeof(control_header_v2) + text.size(), '\0');
+    auto *header = reinterpret_cast<control_header_v2 *>(plaintext.data());
+    header->type = util::endian::little<std::uint16_t>(packetTypes[IDX_CLIPBOARD_TEXT]);
+    header->payloadLength = util::endian::little<std::uint16_t>(static_cast<std::uint16_t>(text.size()));
+    std::copy(text.begin(), text.end(), reinterpret_cast<char *>(header->payload()));
+
+    constexpr std::size_t max_plaintext_size = sizeof(control_header_v2) + MAX_CLIPBOARD_TEXT_SIZE;
+    std::array<std::uint8_t, sizeof(control_encrypted_t) + crypto::cipher::round_to_pkcs7_padded(max_plaintext_size) + crypto::cipher::tag_size>
+      encrypted_payload;
+    const auto payload = encode_control(session, plaintext, encrypted_payload);
+    if (payload.empty() || session->broadcast_ref->control_server.send(payload, session->control.peer)) {
+      BOOST_LOG(warning) << "Couldn't send clipboard text to Moonlight client"sv;
+      return -1;
+    }
+
+    return 0;
+  }
+
+  /**
+   * @brief Handle an input packet that may be a clipboard focus notification.
+   * @param session Active streaming session.
+   * @param input_data Decrypted Moonlight input packet.
+   */
+  void handle_input_data(session_t *session, std::vector<std::uint8_t> &&input_data) {
+    if (input_data.size() >= sizeof(NV_INPUT_HEADER)) {
+      const auto *header = reinterpret_cast<const NV_INPUT_HEADER *>(input_data.data());
+      const auto magic = util::endian::little(header->magic);
+      if (magic == SS_CLIPBOARD_TEXT_EVENT_MAGIC) {
+        const auto declared_size = sizeof(header->size) + util::endian::big(header->size);
+        if (declared_size != input_data.size() || declared_size > sizeof(NV_INPUT_HEADER) + MAX_CLIPBOARD_TEXT_SIZE) {
+          BOOST_LOG(warning) << "Ignoring malformed clipboard text packet"sv;
+          return;
+        }
+
+        if (!(session->config.mlFeatureFlags & ML_FF_CLIPBOARD_SYNC) || !(platf::get_capabilities() & platf::platform_caps::clipboard_sync)) {
+          return;
+        }
+
+        std::string clipboard_text {
+          reinterpret_cast<const char *>(input_data.data() + sizeof(NV_INPUT_HEADER)),
+          input_data.size() - sizeof(NV_INPUT_HEADER)
+        };
+        if (platf::set_clipboard_text(clipboard_text) && session->control.clipboard_focus_tracking) {
+          // A clipboard write originating from this client is not a remote change.
+          session->control.clipboard_focus_snapshot = std::move(clipboard_text);
+        }
+        return;
+      }
+
+      if (magic == SS_CLIPBOARD_FOCUS_EVENT_MAGIC) {
+        const auto declared_size = sizeof(header->size) + util::endian::big(header->size);
+        if (input_data.size() != sizeof(SS_CLIPBOARD_FOCUS_PACKET) || declared_size != input_data.size()) {
+          BOOST_LOG(warning) << "Ignoring malformed clipboard focus packet"sv;
+          return;
+        }
+
+        if (!(session->config.mlFeatureFlags & ML_FF_CLIPBOARD_SYNC) || !(platf::get_capabilities() & platf::platform_caps::clipboard_sync)) {
+          return;
+        }
+
+        const auto *focus_packet = reinterpret_cast<const SS_CLIPBOARD_FOCUS_PACKET *>(input_data.data());
+        if (focus_packet->focused > 1) {
+          BOOST_LOG(warning) << "Ignoring invalid clipboard focus state"sv;
+          return;
+        }
+        if (focus_packet->focused) {
+          session->control.clipboard_focus_snapshot = platf::get_clipboard_text();
+          session->control.clipboard_focus_tracking = true;
+          BOOST_LOG(debug) << "Captured host clipboard state when Moonlight gained focus"sv;
+        } else {
+          if (!session->control.clipboard_focus_tracking) {
+            return;
+          }
+
+          session->control.clipboard_focus_tracking = false;
+          auto clipboard_text = platf::get_clipboard_text();
+          if (clipboard_text && clipboard_text->size() <= MAX_CLIPBOARD_TEXT_SIZE && clipboard_text != session->control.clipboard_focus_snapshot) {
+            send_clipboard_text(session, *clipboard_text);
+          }
+          session->control.clipboard_focus_snapshot.reset();
+        }
+        return;
+      }
+    }
+
+    input::passthrough(session->input, std::move(input_data));
+  }
+
+  /**
    * @brief Run the broadcast control-channel worker thread.
    *
    * @param server RTSP server instance handling the request.
@@ -1177,7 +1281,7 @@ namespace stream {
         std::copy(payload.end() - 16, payload.end(), std::begin(iv));
       }
 
-      input::passthrough(session->input, std::move(plaintext));
+      handle_input_data(session, std::move(plaintext));
     });
 
     server->map(packetTypes[IDX_ENCRYPTED], [server](session_t *session, const std::string_view &payload) {
@@ -1240,7 +1344,7 @@ namespace stream {
       // IDX_INPUT_DATA callback will attempt to decrypt unencrypted data, therefore we need pass it directly
       if (type == packetTypes[IDX_INPUT_DATA]) {
         plaintext.erase(std::begin(plaintext), std::begin(plaintext) + 4);
-        input::passthrough(session->input, std::move(plaintext));
+        handle_input_data(session, std::move(plaintext));
       } else {
         server->call(type, session, next_payload, true);
       }

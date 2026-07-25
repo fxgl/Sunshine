@@ -8,7 +8,11 @@
 #include <cmath>
 #include <cstdint>
 #include <iostream>
+#include <mutex>
+#include <optional>
+#include <string>
 #include <thread>
+#include <vector>
 
 // platform includes
 #include <ApplicationServices/ApplicationServices.h>
@@ -28,6 +32,8 @@ constexpr auto MULTICLICK_DELAY_MS = std::chrono::milliseconds(500);  ///< Maxim
 
 namespace platf {
   using namespace std::literals;
+
+  std::mutex clipboard_mutex;  ///< Serializes Carbon pasteboard access across polling and input threads.
 
   constexpr int WHEEL_DELTA = 120;  ///< Protocol or platform constant for wheel delta.
   constexpr double DEFAULT_SCROLLWHEEL_SCALING = 0.3125;  ///< Protocol or platform constant for default scrollwheel scaling.
@@ -373,7 +379,44 @@ const KeyCodeMap kKeyCodesMap[] = {
   }
 
   void unicode(input_t &input, char *utf8, int size) {
-    BOOST_LOG(info) << "unicode: Unicode input not yet implemented for MacOS."sv;
+    if (size <= 0) {
+      return;
+    }
+
+    auto text = CFStringCreateWithBytes(
+      kCFAllocatorDefault,
+      reinterpret_cast<const UInt8 *>(utf8),
+      size,
+      kCFStringEncodingUTF8,
+      false
+    );
+    if (!text) {
+      BOOST_LOG(warning) << "Failed to decode UTF-8 text input for macOS."sv;
+      return;
+    }
+
+    const auto length = CFStringGetLength(text);
+    if (length == 0) {
+      CFRelease(text);
+      return;
+    }
+
+    std::vector<UniChar> characters(length);
+    CFStringGetCharacters(text, CFRangeMake(0, length), characters.data());
+    CFRelease(text);
+
+    auto macos_input = static_cast<macos_input_t *>(input.get());
+    for (const auto key_down : {true, false}) {
+      auto event = CGEventCreateKeyboardEvent(macos_input->keyboard_source, 0, key_down);
+      if (!event) {
+        BOOST_LOG(warning) << "Failed to create Unicode keyboard event for macOS."sv;
+        return;
+      }
+
+      CGEventKeyboardSetUnicodeString(event, length, characters.data());
+      CGEventPost(kCGSessionEventTap, event);
+      CFRelease(event);
+    }
   }
 
   int alloc_gamepad(input_t &input, const gamepad_id_t &id, const gamepad_arrival_t &metadata, feedback_queue_t feedback_queue) {
@@ -752,6 +795,63 @@ const KeyCodeMap kKeyCodesMap[] = {
    * @return Capability flags.
    */
   platform_caps::caps_t get_capabilities() {
-    return 0;
+    return platform_caps::clipboard_sync;
+  }
+
+  std::optional<std::string> get_clipboard_text() {
+    const std::lock_guard lock {clipboard_mutex};
+
+    PasteboardRef pasteboard = nullptr;
+    if (PasteboardCreate(kPasteboardClipboard, &pasteboard) != noErr) {
+      return std::nullopt;
+    }
+
+    PasteboardSynchronize(pasteboard);
+    ItemCount item_count = 0;
+    if (PasteboardGetItemCount(pasteboard, &item_count) != noErr) {
+      CFRelease(pasteboard);
+      return std::nullopt;
+    }
+
+    for (ItemCount index = 1; index <= item_count; ++index) {
+      PasteboardItemID item_id = nullptr;
+      if (PasteboardGetItemIdentifier(pasteboard, index, &item_id) != noErr) {
+        continue;
+      }
+
+      CFDataRef data = nullptr;
+      if (PasteboardCopyItemFlavorData(pasteboard, item_id, CFSTR("public.utf8-plain-text"), &data) != noErr) {
+        continue;
+      }
+
+      const auto *bytes = CFDataGetBytePtr(data);
+      std::string text(reinterpret_cast<const char *>(bytes), static_cast<std::size_t>(CFDataGetLength(data)));
+      CFRelease(data);
+      CFRelease(pasteboard);
+      return text;
+    }
+
+    CFRelease(pasteboard);
+    return std::nullopt;
+  }
+
+  bool set_clipboard_text(const std::string &text) {
+    const std::lock_guard lock {clipboard_mutex};
+
+    PasteboardRef pasteboard = nullptr;
+    if (PasteboardCreate(kPasteboardClipboard, &pasteboard) != noErr) {
+      return false;
+    }
+
+    const auto *bytes = reinterpret_cast<const UInt8 *>(text.data());
+    CFDataRef data = CFDataCreate(kCFAllocatorDefault, bytes, static_cast<CFIndex>(text.size()));
+    const bool succeeded = data &&
+                           PasteboardClear(pasteboard) == noErr &&
+                           PasteboardPutItemFlavor(pasteboard, reinterpret_cast<PasteboardItemID>(1), CFSTR("public.utf8-plain-text"), data, 0) == noErr;
+    if (data) {
+      CFRelease(data);
+    }
+    CFRelease(pasteboard);
+    return succeeded;
   }
 }  // namespace platf

@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <functional>
 #include <mutex>
+#include <optional>
 #include <string>
 
 // lib includes
@@ -382,6 +383,10 @@ namespace platf {
      * @brief Capability bit indicating controller touchpad support.
      */
     constexpr caps_t controller_touch = 0x02;  // Controller touch events
+    /**
+     * @brief Capability bit indicating bidirectional UTF-8 clipboard synchronization support.
+     */
+    constexpr caps_t clipboard_sync = 0x04;
   };  // namespace platform_caps
 
   /**
@@ -1239,6 +1244,19 @@ namespace platf {
    * @return Capability flags.
    */
   platform_caps::caps_t get_capabilities();
+
+  /**
+   * @brief Read UTF-8 text from the system clipboard.
+   * @return Clipboard text, or no value when clipboard access is unavailable.
+   */
+  std::optional<std::string> get_clipboard_text();
+
+  /**
+   * @brief Replace the system clipboard with UTF-8 text.
+   * @param text UTF-8 text to publish.
+   * @return True when the clipboard was updated successfully.
+   */
+  bool set_clipboard_text(const std::string &text);
 
   constexpr auto SERVICE_NAME = "Sunshine";  ///< mDNS service instance name advertised for GameStream discovery.
   constexpr auto SERVICE_TYPE = "_nvstream._tcp";  ///< mDNS service type advertised for GameStream discovery.

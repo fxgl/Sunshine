@@ -529,6 +529,9 @@ namespace input {
       case UTF8_TEXT_EVENT_MAGIC:
         print((PNV_UNICODE_PACKET) payload);
         break;
+      case SS_CLIPBOARD_TEXT_EVENT_MAGIC:
+        BOOST_LOG(debug) << "Clipboard text packet received (content omitted)"sv;
+        break;
       case MULTI_CONTROLLER_MAGIC_GEN5:
         print((PNV_MULTI_CONTROLLER_PACKET) payload);
         break;
@@ -1045,6 +1048,22 @@ namespace input {
 
     int size = util::endian::big(packet->header.size) - sizeof(packet->header.magic);
     platf::unicode(platf_input, packet->text, size);
+  }
+
+  /**
+   * @brief Replace the host clipboard with UTF-8 text received from a client.
+   * @param packet Clipboard text packet being processed.
+   */
+  void passthrough_clipboard(PNV_UNICODE_PACKET packet) {
+    const int size = util::endian::big(packet->header.size) - sizeof(packet->header.magic);
+    if (size < 0 || size > 60 * 1024) {
+      BOOST_LOG(warning) << "Ignoring invalid clipboard text packet length: "sv << size;
+      return;
+    }
+
+    if (!platf::set_clipboard_text(std::string {packet->text, static_cast<std::size_t>(size)})) {
+      BOOST_LOG(debug) << "Unable to update host clipboard"sv;
+    }
   }
 
   /**
@@ -1790,6 +1809,9 @@ namespace input {
       case UTF8_TEXT_EVENT_MAGIC:
         passthrough((PNV_UNICODE_PACKET) payload);
         break;
+      case SS_CLIPBOARD_TEXT_EVENT_MAGIC:
+        passthrough_clipboard((PNV_UNICODE_PACKET) payload);
+        break;
       case MULTI_CONTROLLER_MAGIC_GEN5:
         passthrough(input, (PNV_MULTI_CONTROLLER_PACKET) payload);
         break;
@@ -1820,6 +1842,20 @@ namespace input {
    * @param input_data The input message.
    */
   void passthrough(std::shared_ptr<input_t> &input, std::vector<std::uint8_t> &&input_data) {
+    if (input_data.size() < sizeof(NV_INPUT_HEADER)) {
+      BOOST_LOG(warning) << "Ignoring runt input packet"sv;
+      return;
+    }
+
+    const auto *header = reinterpret_cast<const NV_INPUT_HEADER *>(input_data.data());
+    if (util::endian::little(header->magic) == SS_CLIPBOARD_TEXT_EVENT_MAGIC) {
+      const std::size_t declared_size = sizeof(header->size) + util::endian::big(header->size);
+      if (declared_size != input_data.size() || declared_size > sizeof(NV_INPUT_HEADER) + 60 * 1024) {
+        BOOST_LOG(warning) << "Ignoring malformed clipboard text packet"sv;
+        return;
+      }
+    }
+
     {
       std::lock_guard<std::mutex> lg(input->input_queue_lock);
       input->input_queue.push_back(std::move(input_data));

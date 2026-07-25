@@ -22,6 +22,22 @@
   <a href="https://sonarcloud.io/project/overview?id=LizardByte_Sunshine"><img src="https://img.shields.io/sonar/quality_gate/LizardByte_Sunshine.svg?server=https%3A%2F%2Fsonarcloud.io&style=for-the-badge&logo=sonarqubecloud&label=sonarcloud" alt="SonarCloud"></a>
 </div>
 
+> [!IMPORTANT]
+> This is a remote-desktop-focused fork of Sunshine. It is designed to be used with
+> [fxgl/moonlight-qt](https://github.com/fxgl/moonlight-qt) and the bundled
+> [fxgl/moonlight-common-c](https://github.com/fxgl/moonlight-common-c) protocol fork.
+
+## Why this fork exists
+
+This fork adds clipboard and text-input behavior for controlling a remote PC or Mac as a desktop rather than only as a game-streaming target:
+
+- **Bidirectional UTF-8 clipboard synchronization.** Clipboard writes from Moonlight are applied immediately on the host.
+- **Focus-aware host-to-client transfer.** Sunshine snapshots the host clipboard when Moonlight gains focus. When Moonlight loses focus, Sunshine sends the current text only if it differs from that snapshot. There is no continuous polling or unsolicited clipboard broadcast.
+- **Origin tracking.** A clipboard write received from a Moonlight client updates that session's snapshot, so it is not reported back as a remote change.
+- **Unicode text input on macOS.** Text composed with the Moonlight client's keyboard layout can be injected without depending on the host keyboard layout.
+
+Clipboard payloads are text-only and limited to 60 KiB. Host clipboard integration is currently implemented on **macOS and Windows**; unsupported platforms do not advertise the capability. The full feature set requires the matching fxgl Moonlight client and the pinned `moonlight-common-c` submodule.
+
 ## ℹ️ About
 
 Sunshine is a self-hosted game stream host for Moonlight.
