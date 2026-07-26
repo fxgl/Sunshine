@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <iostream>
 #include <mutex>
 #include <optional>
@@ -38,6 +39,25 @@ namespace platf {
   constexpr int WHEEL_DELTA = 120;  ///< Protocol or platform constant for wheel delta.
   constexpr double DEFAULT_SCROLLWHEEL_SCALING = 0.3125;  ///< Protocol or platform constant for default scrollwheel scaling.
   constexpr int DEFAULT_SCROLL_LINES_PER_DETENT = 5;  ///< Protocol or platform constant for default scroll lines per detent.
+
+  /**
+   * @brief Convert a Core Foundation string to UTF-8.
+   * @param value Core Foundation string to convert.
+   * @return UTF-8 text, or an empty string when conversion fails.
+   */
+  std::string cf_string_to_utf8(CFStringRef value) {
+    if (!value) {
+      return {};
+    }
+
+    const CFIndex capacity = CFStringGetMaximumSizeForEncoding(CFStringGetLength(value), kCFStringEncodingUTF8) + 1;
+    std::string utf8(static_cast<std::size_t>(capacity), '\0');
+    if (!CFStringGetCString(value, utf8.data(), capacity, kCFStringEncodingUTF8)) {
+      return {};
+    }
+    utf8.resize(std::strlen(utf8.c_str()));
+    return utf8;
+  }
 
   /**
    * @brief macOS input source and target display state.
@@ -795,7 +815,59 @@ const KeyCodeMap kKeyCodesMap[] = {
    * @return Capability flags.
    */
   platform_caps::caps_t get_capabilities() {
-    return platform_caps::clipboard_sync;
+    return platform_caps::clipboard_sync | platform_caps::keyboard_layout_sync;
+  }
+
+  bool set_keyboard_layout(const keyboard_layout_t &layout) {
+    CFArrayRef sources = TISCreateInputSourceList(nullptr, true);
+    if (!sources) {
+      return false;
+    }
+
+    TISInputSourceRef best_source = nullptr;
+    int best_score = -1;
+    const CFIndex source_count = CFArrayGetCount(sources);
+    for (CFIndex source_index = 0; source_index < source_count; ++source_index) {
+      const auto source = static_cast<TISInputSourceRef>(const_cast<void *>(CFArrayGetValueAtIndex(sources, source_index)));
+      const auto category = static_cast<CFStringRef>(TISGetInputSourceProperty(source, kTISPropertyInputSourceCategory));
+      const auto source_type = static_cast<CFStringRef>(TISGetInputSourceProperty(source, kTISPropertyInputSourceType));
+      const auto source_id = static_cast<CFStringRef>(TISGetInputSourceProperty(source, kTISPropertyInputSourceID));
+      const auto languages = static_cast<CFArrayRef>(TISGetInputSourceProperty(source, kTISPropertyInputSourceLanguages));
+      if (!category || !CFEqual(category, kTISCategoryKeyboardInputSource) || !source_type ||
+          (!CFEqual(source_type, kTISTypeKeyboardLayout) && !CFEqual(source_type, kTISTypeKeyboardInputMode)) ||
+          !source_id || !languages) {
+        continue;
+      }
+
+      const std::string native_id = cf_string_to_utf8(source_id);
+      for (CFIndex language_index = 0; language_index < CFArrayGetCount(languages); ++language_index) {
+        keyboard_layout_t candidate {
+          LI_KEYBOARD_LAYOUT_PLATFORM_MACOS,
+          cf_string_to_utf8(static_cast<CFStringRef>(CFArrayGetValueAtIndex(languages, language_index))),
+          native_id,
+        };
+        int score = keyboard_layout_match_score(layout, candidate);
+        if (score >= 0 && CFEqual(source_type, kTISTypeKeyboardLayout)) {
+          score += 10;
+        }
+        if (score > best_score) {
+          best_score = score;
+          best_source = source;
+        }
+      }
+    }
+
+    bool selected = false;
+    if (best_source && best_score >= 0) {
+      OSStatus status = TISSelectInputSource(best_source);
+      if (status != noErr && TISEnableInputSource(best_source) == noErr) {
+        status = TISSelectInputSource(best_source);
+      }
+      selected = status == noErr;
+    }
+
+    CFRelease(sources);
+    return selected;
   }
 
   std::optional<std::string> get_clipboard_text() {

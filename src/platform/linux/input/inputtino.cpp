@@ -96,6 +96,10 @@ namespace platf {
     platf::keyboard::unicode(raw, utf8, size);
   }
 
+  bool set_keyboard_layout(const keyboard_layout_t &) {
+    return false;
+  }
+
   void touch_update(client_input_t *input, const touch_port_t &touch_port, const touch_input_t &touch) {
     auto raw = (client_input_raw_t *) input;
     platf::touch::update(raw, touch_port, touch);

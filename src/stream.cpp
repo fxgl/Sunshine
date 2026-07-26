@@ -1238,7 +1238,7 @@ namespace stream {
   }
 
   /**
-   * @brief Handle an input packet that may be a clipboard focus notification.
+   * @brief Handle input packets that require synchronous host state updates.
    * @param session Active streaming session.
    * @param input_data Decrypted Moonlight input packet.
    */
@@ -1299,6 +1299,21 @@ namespace stream {
             send_clipboard_text(session, *clipboard_text);
           }
           session->control.clipboard_focus_snapshot.reset();
+        }
+        return;
+      }
+
+      if (magic == SS_KEYBOARD_LAYOUT_EVENT_MAGIC) {
+        const auto layout = input::parse_keyboard_layout_packet({reinterpret_cast<const char *>(input_data.data()), input_data.size()});
+        if (!layout) {
+          BOOST_LOG(warning) << "Ignoring malformed keyboard layout packet"sv;
+          return;
+        }
+        if (!(session->config.mlFeatureFlags & ML_FF_KEYBOARD_LAYOUT_SYNC) || !(platf::get_capabilities() & platf::platform_caps::keyboard_layout_sync)) {
+          return;
+        }
+        if (config::input.keyboard && !platf::set_keyboard_layout(*layout)) {
+          BOOST_LOG(warning) << "No compatible host keyboard layout found for "sv << layout->language;
         }
         return;
       }

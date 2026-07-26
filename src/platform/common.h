@@ -11,6 +11,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 
 // lib includes
 #include <boost/core/noncopyable.hpp>
@@ -387,7 +388,30 @@ namespace platf {
      * @brief Capability bit indicating bidirectional UTF-8 clipboard synchronization support.
      */
     constexpr caps_t clipboard_sync = 0x04;
+    /**
+     * @brief Capability bit indicating host keyboard layout synchronization support.
+     */
+    constexpr caps_t keyboard_layout_sync = 0x20;
   };  // namespace platform_caps
+
+  /**
+   * @brief Cross-platform keyboard layout identity received from Moonlight.
+   */
+  struct keyboard_layout_t {
+    std::uint8_t platform {};  ///< LI_KEYBOARD_LAYOUT_PLATFORM_* source platform.
+    std::string language;  ///< BCP-47 language tag used for cross-platform matching.
+    std::string id;  ///< Platform-specific identifier used for exact same-platform matching.
+  };
+
+  /**
+   * @brief Score an installed layout candidate against a client layout request.
+   *
+   * Exact native IDs win, followed by exact BCP-47 tags and then matching primary languages.
+   * @param requested Layout requested by Moonlight.
+   * @param candidate Installed host layout candidate.
+   * @return A non-negative match score, or -1 when the candidate is incompatible.
+   */
+  int keyboard_layout_match_score(const keyboard_layout_t &requested, const keyboard_layout_t &candidate);
 
   /**
    * @brief Button and axis state received for a virtual gamepad.
@@ -1172,6 +1196,13 @@ namespace platf {
    * @param size Number of bytes or elements requested.
    */
   void unicode(input_t &input, char *utf8, int size);
+
+  /**
+   * @brief Select the nearest installed host keyboard layout for a client request.
+   * @param layout Cross-platform layout descriptor supplied by Moonlight.
+   * @return True when a matching host layout was selected.
+   */
+  bool set_keyboard_layout(const keyboard_layout_t &layout);
 
   /**
    * @brief Per-client input context allocated by a platform backend.

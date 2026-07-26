@@ -10,6 +10,7 @@ extern "C" {
 
 // standard includes
 #include <bitset>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <list>
@@ -38,6 +39,36 @@ using namespace std::literals;
 namespace input {
 
   constexpr auto MAX_GAMEPADS = std::min((std::size_t) platf::MAX_GAMEPADS, sizeof(std::int16_t) * 8);  ///< Maximum gamepads representable by the active gamepad mask.
+
+  std::optional<platf::keyboard_layout_t> parse_keyboard_layout_packet(std::string_view packet) {
+    constexpr std::size_t fixed_size = offsetof(SS_KEYBOARD_LAYOUT_PACKET, data);
+    if (packet.size() < fixed_size) {
+      return std::nullopt;
+    }
+
+    const auto *layout_packet = reinterpret_cast<const SS_KEYBOARD_LAYOUT_PACKET *>(packet.data());
+    const std::size_t declared_size = sizeof(layout_packet->header.size) + util::endian::big(layout_packet->header.size);
+    const std::size_t language_length = layout_packet->languageLength;
+    const std::size_t layout_id_length = util::endian::little(layout_packet->layoutIdLength);
+    if (util::endian::little(layout_packet->header.magic) != SS_KEYBOARD_LAYOUT_EVENT_MAGIC || declared_size != packet.size() || language_length == 0 || language_length > SS_KEYBOARD_LAYOUT_LANGUAGE_MAX_COUNT || layout_id_length > SS_KEYBOARD_LAYOUT_ID_MAX_COUNT || fixed_size + language_length + layout_id_length != packet.size()) {
+      return std::nullopt;
+    }
+
+    const std::string_view language {layout_packet->data, language_length};
+    if (!std::ranges::all_of(language, [](char character) {
+          const auto byte = static_cast<unsigned char>(character);
+          return std::isalnum(byte) || character == '-' || character == '_';
+        })) {
+      return std::nullopt;
+    }
+
+    return platf::keyboard_layout_t {
+      layout_packet->platform,
+      std::string {language},
+      std::string {layout_packet->data + language_length, layout_id_length},
+    };
+  }
+
 /**
  * @def DISABLE_LEFT_BUTTON_DELAY
  * @brief Macro for DISABLE LEFT BUTTON DELAY.
@@ -1855,7 +1886,6 @@ namespace input {
         return;
       }
     }
-
     {
       std::lock_guard<std::mutex> lg(input->input_queue_lock);
       input->input_queue.push_back(std::move(input_data));

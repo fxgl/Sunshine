@@ -6,6 +6,8 @@
 
 // standard includes
 #include <functional>
+#include <optional>
+#include <string_view>
 
 // local includes
 #include "platform/common.h"
@@ -13,6 +15,13 @@
 
 namespace input {
   struct input_t;
+
+  /**
+   * @brief Parse and validate a keyboard layout synchronization packet.
+   * @param packet Complete serialized input packet.
+   * @return Parsed layout descriptor, or no value for malformed input.
+   */
+  std::optional<platf::keyboard_layout_t> parse_keyboard_layout_packet(std::string_view packet);
 
   /**
    * @brief Write a debug log representation of the input packet.

@@ -19,6 +19,7 @@
 // standard includes
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <thread>
 #include <vector>
 
@@ -1247,6 +1248,77 @@ namespace platf {
     }
   }
 
+  /**
+   * @brief Describe a Windows keyboard layout using a BCP-47 tag and KLID.
+   * @param layout Windows keyboard layout handle.
+   * @return Cross-platform layout descriptor, or an invalid descriptor on failure.
+   */
+  keyboard_layout_t describe_keyboard_layout(HKL layout) {
+    wchar_t locale_name[LOCALE_NAME_MAX_LENGTH] = {};
+    const LANGID language_id = LOWORD(reinterpret_cast<ULONG_PTR>(layout));
+    if (LCIDToLocaleName(MAKELCID(language_id, SORT_DEFAULT), locale_name, LOCALE_NAME_MAX_LENGTH, 0) == 0) {
+      return {};
+    }
+
+    char layout_id[9] = {};
+    std::snprintf(layout_id, sizeof(layout_id), "%08lX", static_cast<unsigned long>(reinterpret_cast<ULONG_PTR>(layout) & 0xFFFFFFFFUL));
+    return {
+      LI_KEYBOARD_LAYOUT_PLATFORM_WINDOWS,
+      utf_utils::to_utf8(std::wstring {locale_name}),
+      layout_id,
+    };
+  }
+
+  /**
+   * @brief Activate a keyboard layout for the foreground application.
+   * @param layout Windows keyboard layout handle to activate.
+   * @return True when the request was delivered or activated locally.
+   */
+  bool activate_keyboard_layout(HKL layout) {
+    if (HWND foreground = GetForegroundWindow()) {
+      DWORD_PTR result = 0;
+      if (SendMessageTimeoutW(foreground, WM_INPUTLANGCHANGEREQUEST, 0, reinterpret_cast<LPARAM>(layout), SMTO_ABORTIFHUNG, 250, &result) != 0) {
+        return true;
+      }
+    }
+
+    ActivateKeyboardLayout(layout, 0);
+    return GetKeyboardLayout(0) == layout;
+  }
+
+  bool set_keyboard_layout(const keyboard_layout_t &requested) {
+    HKL best_layout = nullptr;
+    int best_score = -1;
+
+    if (requested.platform == LI_KEYBOARD_LAYOUT_PLATFORM_WINDOWS && !requested.id.empty()) {
+      const std::wstring layout_id = utf_utils::from_utf8(requested.id);
+      if (!layout_id.empty()) {
+        HKL exact_layout = LoadKeyboardLayoutW(layout_id.c_str(), KLF_NOTELLSHELL);
+        if (exact_layout) {
+          auto exact_descriptor = describe_keyboard_layout(exact_layout);
+          exact_descriptor.id = requested.id;
+          best_layout = exact_layout;
+          best_score = keyboard_layout_match_score(requested, exact_descriptor);
+        }
+      }
+    }
+
+    const int layout_count = GetKeyboardLayoutList(0, nullptr);
+    std::vector<HKL> layouts(static_cast<std::size_t>(std::max(layout_count, 0)));
+    if (layout_count > 0) {
+      GetKeyboardLayoutList(layout_count, layouts.data());
+    }
+    for (HKL candidate_layout : layouts) {
+      const int score = keyboard_layout_match_score(requested, describe_keyboard_layout(candidate_layout));
+      if (score > best_score) {
+        best_score = score;
+        best_layout = candidate_layout;
+      }
+    }
+
+    return best_layout && best_score >= 0 && activate_keyboard_layout(best_layout);
+  }
+
   int alloc_gamepad(input_t &input, const gamepad_id_t &id, const gamepad_arrival_t &metadata, feedback_queue_t feedback_queue) {
     auto raw = (input_raw_t *) input.get();
 
@@ -1836,7 +1908,7 @@ namespace platf {
    * @return Capability flags.
    */
   platform_caps::caps_t get_capabilities() {
-    platform_caps::caps_t caps = platform_caps::clipboard_sync;
+    platform_caps::caps_t caps = platform_caps::clipboard_sync | platform_caps::keyboard_layout_sync;
 
     // We support controller touchpad input as long as we're not emulating X360
     if (config::input.gamepad != "x360"sv) {
