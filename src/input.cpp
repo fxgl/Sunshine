@@ -610,11 +610,7 @@ namespace input {
    * @return The host-relative coordinate pair if a touchport is available.
    */
   std::optional<std::pair<float, float>> client_to_touchport(std::shared_ptr<input_t> &input, const std::pair<float, float> &val, const std::pair<float, float> &size) {
-    auto &touch_port_event = input->touch_port_event;
     auto &touch_port = input->touch_port;
-    if (touch_port_event->peek()) {
-      touch_port = *touch_port_event->pop();
-    }
     if (!touch_port) {
       BOOST_LOG(verbose) << "Ignoring early absolute input without a touch port"sv;
       return std::nullopt;
@@ -1810,6 +1806,14 @@ namespace input {
           i++;
         }
       }
+    }
+
+    // Capture reinitialization publishes a new touch port. Apply it before any
+    // queued event (including relative mouse movement) so platform backends can
+    // retarget input to the display that is now being streamed.
+    while (input->touch_port_event->peek()) {
+      input->touch_port = *input->touch_port_event->pop();
+      platf::set_active_display(platf_input, input->touch_port);
     }
 
     // Print the final input packet

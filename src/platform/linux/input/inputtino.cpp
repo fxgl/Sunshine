@@ -56,6 +56,10 @@ namespace platf {
     platf::mouse::move_abs(raw, touch_port, x, y);
   }
 
+  void set_active_display([[maybe_unused]] input_t &input, [[maybe_unused]] const touch_port_t &touch_port) {
+    // inputtino receives the active viewport with each absolute input event.
+  }
+
   /**
    * @brief Press or release a virtual mouse button.
    */

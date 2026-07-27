@@ -599,6 +599,11 @@ namespace platf {
     send_input(i);
   }
 
+  void set_active_display([[maybe_unused]] input_t &input, [[maybe_unused]] const touch_port_t &touch_port) {
+    // Windows absolute input already targets the virtual desktop using the
+    // viewport offset carried in touch_port.
+  }
+
   void move_mouse(input_t &input, int deltaX, int deltaY) {
     INPUT i {};
 

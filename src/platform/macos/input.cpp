@@ -4,6 +4,7 @@
  */
 // standard includes
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -65,7 +66,6 @@ namespace platf {
   struct macos_input_t {
   public:
     CGDirectDisplayID display {};  ///< CoreGraphics identifier for the display receiving injected input.
-    CGFloat displayScaling {};  ///< Scale factor used to translate client coordinates to display pixels.
     CGEventSourceRef source {};  ///< CoreGraphics event source used for mouse and scroll events.
 
     // keyboard related stuff
@@ -551,21 +551,48 @@ const KeyCodeMap kKeyCodesMap[] = {
 
   void abs_mouse(
     input_t &input,
-    const touch_port_t &touch_port,
+    [[maybe_unused]] const touch_port_t &touch_port,
     const float x,
     const float y
   ) {
-    const auto macos_input = static_cast<macos_input_t *>(input.get());
-    const auto scaling = macos_input->displayScaling;
-    const auto display = macos_input->display;
+    // client_to_touchport() has already converted these values to global logical
+    // desktop coordinates, including the active display's origin and Retina scale.
+    post_mouse(input, kCGMouseButtonLeft, event_type_mouse(input), {x, y}, get_mouse_loc(input), 0);
+  }
 
-    auto location = util::point_t {x * scaling, y * scaling};
-    CGRect display_bounds = CGDisplayBounds(display);
-    // in order to get the correct mouse location for capturing display , we need to add the display bounds to the location
-    location.x += display_bounds.origin.x;
-    location.y += display_bounds.origin.y;
+  void set_active_display(input_t &input, const touch_port_t &touch_port) {
+    auto macos_input = static_cast<macos_input_t *>(input.get());
 
-    post_mouse(input, kCGMouseButtonLeft, event_type_mouse(input), location, get_mouse_loc(input), 0);
+    constexpr std::size_t max_displays = 32;
+    std::array<CGDirectDisplayID, max_displays> displays {};
+    std::uint32_t display_count = 0;
+    if (CGGetActiveDisplayList(displays.size(), displays.data(), &display_count) != kCGErrorSuccess) {
+      BOOST_LOG(warning) << "Unable to retarget mouse input: active display enumeration failed"sv;
+      return;
+    }
+
+    for (std::uint32_t index = 0; index < display_count; ++index) {
+      const CGRect bounds = CGDisplayBounds(displays[index]);
+      const bool same_origin =
+        std::lround(bounds.origin.x) == touch_port.offset_x &&
+        std::lround(bounds.origin.y) == touch_port.offset_y;
+      const bool same_size =
+        touch_port.logical_width <= 0 || touch_port.logical_height <= 0 ||
+        (std::lround(bounds.size.width) == touch_port.logical_width &&
+         std::lround(bounds.size.height) == touch_port.logical_height);
+      if (same_origin && same_size) {
+        if (macos_input->display != displays[index]) {
+          BOOST_LOG(info) << "Retargeting mouse input to display "sv << displays[index];
+          macos_input->display = displays[index];
+        }
+        return;
+      }
+    }
+
+    BOOST_LOG(warning)
+      << "Unable to match streamed display viewport at "sv
+      << touch_port.offset_x << ',' << touch_port.offset_y << " ("sv
+      << touch_port.logical_width << 'x' << touch_port.logical_height << ')';
   }
 
   void button_mouse(input_t &input, const int button, const bool release) {
@@ -769,11 +796,6 @@ const KeyCodeMap kKeyCodesMap[] = {
         }
       }
     }
-
-    // Input coordinates are based on the virtual resolution not the physical, so we need the scaling factor
-    const CGDisplayModeRef mode = CGDisplayCopyDisplayMode(macos_input->display);
-    macos_input->displayScaling = ((CGFloat) CGDisplayPixelsWide(macos_input->display)) / ((CGFloat) CGDisplayModeGetPixelWidth(mode));
-    CFRelease(mode);
 
     macos_input->source = CGEventSourceCreate(kCGEventSourceStateHIDSystemState);
     macos_input->keyboard_source = CGEventSourceCreate(kCGEventSourceStatePrivate);

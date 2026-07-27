@@ -54,6 +54,9 @@ namespace video {
     int enableIntraRefresh;  ///< Intra refresh setting: 0 = disabled, 1 = enabled.
   };
 
+  /** Build absolute-input viewport metadata for the active capture display. */
+  input::touch_port_t make_port(platf::display_t *display, const config_t &config);
+
   namespace amf {
 
     /**

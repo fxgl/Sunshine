@@ -1156,6 +1156,15 @@ namespace platf {
    * @param y Vertical absolute coordinate from the client.
    */
   void abs_mouse(input_t &input, const touch_port_t &touch_port, float x, float y);
+
+  /**
+   * @brief Update the display that should receive mouse input.
+   * @param input Platform input backend to update.
+   * @param touch_port Viewport metadata for the display currently being captured.
+   *
+   * Platforms without display-scoped pointer injection may implement this as a no-op.
+   */
+  void set_active_display(input_t &input, const touch_port_t &touch_port);
   /**
    * @brief Press or release a virtual mouse button.
    *

@@ -80,6 +80,54 @@ TEST(HostDisplayControlTest, RejectsInvalidSwitch) {
 }
 
 namespace {
+  class display_viewport_stub_t final: public platf::display_t {
+  public:
+    platf::capture_e capture(
+      const push_captured_image_cb_t &,
+      const pull_free_image_cb_t &,
+      bool *
+    ) override {
+      return platf::capture_e::ok;
+    }
+
+    std::shared_ptr<platf::img_t> alloc_img() override {
+      return nullptr;
+    }
+
+    int dummy_img(platf::img_t *) override {
+      return 0;
+    }
+  };
+}
+
+TEST(HostDisplayControlTest, PropagatesActiveDisplayViewportToInput) {
+  display_viewport_stub_t display;
+  display.offset_x = -1920;
+  display.offset_y = 180;
+  display.width = 3840;
+  display.height = 2160;
+  display.logical_width = 1920;
+  display.logical_height = 1080;
+  display.env_width = 3840;
+  display.env_height = 2160;
+  display.env_logical_width = 1920;
+  display.env_logical_height = 1080;
+
+  video::config_t config {};
+  config.width = 2560;
+  config.height = 1440;
+  const auto port = video::make_port(&display, config);
+
+  EXPECT_EQ(port.offset_x, -1920);
+  EXPECT_EQ(port.offset_y, 180);
+  EXPECT_EQ(port.logical_width, 1920);
+  EXPECT_EQ(port.logical_height, 1080);
+  EXPECT_EQ(port.env_logical_width, 1920);
+  EXPECT_EQ(port.env_logical_height, 1080);
+  EXPECT_FLOAT_EQ(port.scalar_tpcoords, 2.0f);
+}
+
+namespace {
   std::string adaptive_quality_payload(std::uint32_t bitrate, std::uint16_t width, std::uint16_t height) {
     SS_ADAPTIVE_STREAM_CONFIG request {
       boost::endian::native_to_little(bitrate),

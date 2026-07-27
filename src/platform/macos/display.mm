@@ -6,6 +6,7 @@
 // standard includes
 #include <charconv>
 #include <chrono>
+#include <cmath>
 #include <optional>
 #include <string_view>
 
@@ -267,9 +268,16 @@ namespace platf {
 
     display->width = display->av_capture.frameWidth;
     display->height = display->av_capture.frameHeight;
+    const CGRect display_bounds = CGDisplayBounds(display->display_id);
+    display->offset_x = static_cast<int>(std::lround(display_bounds.origin.x));
+    display->offset_y = static_cast<int>(std::lround(display_bounds.origin.y));
+    display->logical_width = static_cast<int>(std::lround(display_bounds.size.width));
+    display->logical_height = static_cast<int>(std::lround(display_bounds.size.height));
     // We also need set env_width and env_height for absolute mouse coordinates
     display->env_width = display->width;
     display->env_height = display->height;
+    display->env_logical_width = display->logical_width;
+    display->env_logical_height = display->logical_height;
 
     if (hwdevice_type == platf::mem_type_e::videotoolbox) {
       const auto pixel_format {videotoolbox_pixel_format(config)};
