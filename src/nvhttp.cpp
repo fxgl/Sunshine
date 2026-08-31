@@ -883,6 +883,7 @@ namespace nvhttp {
 
     tree.put("root.<xmlattr>.status_code", 200);
     tree.put("root.hostname", config::nvhttp.sunshine_name);
+    tree.put("root.Platform", SUNSHINE_PLATFORM);
 
     tree.put("root.appversion", VERSION);
     tree.put("root.GfeVersion", GFE_VERSION);
