@@ -392,6 +392,10 @@ namespace platf {
      * @brief Capability bit indicating host keyboard layout synchronization support.
      */
     constexpr caps_t keyboard_layout_sync = 0x20;
+    /**
+     * @brief Capability bit indicating active-window display detection support.
+     */
+    constexpr caps_t active_window_display = 0x40;
   };  // namespace platform_caps
 
   /**
@@ -928,6 +932,13 @@ namespace platf {
    * @return Display names accepted by the selected capture backend.
    */
   std::vector<std::string> display_names(mem_type_e hwdevice_type);
+
+  /**
+   * @brief Get the capture display name containing the foreground window.
+   *
+   * @return Display name accepted by display(), or no value when unavailable.
+   */
+  std::optional<std::string> active_window_display_name();
 
   /**
    * @brief Check if GPUs/drivers have changed since the last call to this function.

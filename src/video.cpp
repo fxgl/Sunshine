@@ -1525,6 +1525,28 @@ namespace video {
     return true;
   }
 
+  std::optional<int> find_display_index(const std::vector<std::string> &display_names, std::string_view display_name) {
+    const auto display = std::find(display_names.begin(), display_names.end(), display_name);
+    if (display == display_names.end()) {
+      return std::nullopt;
+    }
+    return static_cast<int>(std::distance(display_names.begin(), display));
+  }
+
+  std::optional<int> active_window_display_index() {
+    if (!(platf::get_capabilities() & platf::platform_caps::active_window_display)) {
+      return std::nullopt;
+    }
+
+    const auto display_name = platf::active_window_display_name();
+    if (!display_name) {
+      return std::nullopt;
+    }
+
+    const auto displays = get_display_list();
+    return find_display_index(displays.names, *display_name);
+  }
+
   /**
    * @brief Run the shared display capture thread for asynchronous encoding.
    *
@@ -2473,8 +2495,7 @@ namespace video {
       //
       // Ensure that this check occurs as close as possible to the encode call to prevent packets
       // in flight after encoder teardown.
-      if (shutdown_event->peek() || !images->running() || video_config_events->peek() ||
-          (reinit_event.peek() && frame_nr > 1)) {
+      if (shutdown_event->peek() || !images->running() || video_config_events->peek() || (reinit_event.peek() && frame_nr > 1)) {
         break;
       }
 
@@ -3190,9 +3211,7 @@ namespace video {
 
         auto encoder_codec_name = encoder.codec_from_config(config).name;
 
-        if ((encoder.flags & YUV444_SUPPORT) &&
-            disp->is_codec_supported(encoder_codec_name, config) &&
-            validate_config(disp, encoder, config) >= 0) {
+        if ((encoder.flags & YUV444_SUPPORT) && disp->is_codec_supported(encoder_codec_name, config) && validate_config(disp, encoder, config) >= 0) {
           flag_map[encoder_t::YUV444] = true;
         } else {
           flag_map[encoder_t::YUV444] = false;
@@ -3232,9 +3251,7 @@ namespace video {
 
         auto encoder_codec_name = encoder.codec_from_config(config).name;
 
-        if ((encoder.flags & YUV444_SUPPORT) &&
-            disp->is_codec_supported(encoder_codec_name, config) &&
-            validate_config(disp, encoder, config) >= 0) {
+        if ((encoder.flags & YUV444_SUPPORT) && disp->is_codec_supported(encoder_codec_name, config) && validate_config(disp, encoder, config) >= 0) {
           flag_map[encoder_t::DYNAMIC_RANGE_YUV444] = true;
         } else {
           flag_map[encoder_t::DYNAMIC_RANGE_YUV444] = false;
@@ -3364,29 +3381,25 @@ namespace video {
         }
 
         // Skip it if it doesn't support the specified codec at all
-        if ((active_hevc_mode >= 2 && !encoder->hevc[encoder_t::PASSED]) ||
-            (active_av1_mode >= 2 && !encoder->av1[encoder_t::PASSED])) {
+        if ((active_hevc_mode >= 2 && !encoder->hevc[encoder_t::PASSED]) || (active_av1_mode >= 2 && !encoder->av1[encoder_t::PASSED])) {
           pos++;
           continue;
         }
 
         // Skip it if it doesn't support HDR on the specified codec
-        if ((active_hevc_mode == 5 && !encoder->hevc[encoder_t::DYNAMIC_RANGE] && !encoder->hevc[encoder_t::DYNAMIC_RANGE_YUV444]) ||
-            (active_av1_mode == 5 && !encoder->av1[encoder_t::DYNAMIC_RANGE] && !encoder->av1[encoder_t::DYNAMIC_RANGE_YUV444])) {
+        if ((active_hevc_mode == 5 && !encoder->hevc[encoder_t::DYNAMIC_RANGE] && !encoder->hevc[encoder_t::DYNAMIC_RANGE_YUV444]) || (active_av1_mode == 5 && !encoder->av1[encoder_t::DYNAMIC_RANGE] && !encoder->av1[encoder_t::DYNAMIC_RANGE_YUV444])) {
           pos++;
           continue;
         }
 
         // Skip it if it doesn't support HDR on the specified codec
-        if ((active_hevc_mode == 4 && !encoder->hevc[encoder_t::DYNAMIC_RANGE_YUV444]) ||
-            (active_av1_mode == 4 && !encoder->av1[encoder_t::DYNAMIC_RANGE_YUV444])) {
+        if ((active_hevc_mode == 4 && !encoder->hevc[encoder_t::DYNAMIC_RANGE_YUV444]) || (active_av1_mode == 4 && !encoder->av1[encoder_t::DYNAMIC_RANGE_YUV444])) {
           pos++;
           continue;
         }
 
         // Skip it if it doesn't support HDR on the specified codec
-        if ((active_hevc_mode == 3 && !encoder->hevc[encoder_t::DYNAMIC_RANGE]) ||
-            (active_av1_mode == 3 && !encoder->av1[encoder_t::DYNAMIC_RANGE])) {
+        if ((active_hevc_mode == 3 && !encoder->hevc[encoder_t::DYNAMIC_RANGE]) || (active_av1_mode == 3 && !encoder->av1[encoder_t::DYNAMIC_RANGE])) {
           pos++;
           continue;
         }

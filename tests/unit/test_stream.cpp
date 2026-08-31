@@ -3,17 +3,16 @@
  * @brief Test src/stream.*
  */
 
+#include <boost/endian/conversion.hpp>
 #include <cstdint>
 #include <cstring>
 #include <functional>
 #include <string>
 #include <vector>
 
-#include <boost/endian/conversion.hpp>
-
 extern "C" {
-  #include <moonlight-common-c/src/Input.h>
-  #include <moonlight-common-c/src/Video.h>
+#include <moonlight-common-c/src/Input.h>
+#include <moonlight-common-c/src/Video.h>
 }
 
 #include <src/input.h>
@@ -79,6 +78,12 @@ TEST(HostDisplayControlTest, RejectsInvalidSwitch) {
   EXPECT_FALSE(stream::parse_host_display_switch(std::string_view("\0", 1), 2));
 }
 
+TEST(HostDisplayControlTest, FindsActiveWindowDisplay) {
+  EXPECT_EQ(video::find_display_index({"Display A", "Display B"}, "Display B"), 1);
+  EXPECT_FALSE(video::find_display_index({"Display A", "Display B"}, "Display C"));
+  EXPECT_FALSE(video::find_display_index({}, "Display A"));
+}
+
 namespace {
   class display_viewport_stub_t final: public platf::display_t {
   public:
@@ -98,7 +103,7 @@ namespace {
       return 0;
     }
   };
-}
+}  // namespace
 
 TEST(HostDisplayControlTest, PropagatesActiveDisplayViewportToInput) {
   display_viewport_stub_t display;

@@ -94,11 +94,7 @@ namespace stream {
     const auto requestedWidth = util::endian::little(request.width);
     const auto requestedHeight = util::endian::little(request.height);
 
-    if (requestedBitrate < 500 || requestedBitrate > (uint32_t) config.configuredBitrateKbps ||
-        requestedWidth < 320 || requestedHeight < 180 ||
-        requestedWidth > (uint32_t) config.monitor.width ||
-        requestedHeight > (uint32_t) config.monitor.height ||
-        (requestedWidth & 1) || (requestedHeight & 1)) {
+    if (requestedBitrate < 500 || requestedBitrate > (uint32_t) config.configuredBitrateKbps || requestedWidth < 320 || requestedHeight < 180 || requestedWidth > (uint32_t) config.monitor.width || requestedHeight > (uint32_t) config.monitor.height || (requestedWidth & 1) || (requestedHeight & 1)) {
       return std::nullopt;
     }
 
@@ -1418,6 +1414,30 @@ namespace stream {
       send_host_display_list(session);
     });
 
+    server->map(SS_HOST_ACTIVE_WINDOW_DISPLAY_PTYPE, [&](session_t *session, const std::string_view &payload) {
+      if (!(session->config.mlFeatureFlags & ML_FF_ACTIVE_WINDOW_DISPLAY) || !(platf::get_capabilities() & platf::platform_caps::active_window_display) || !payload.empty()) {
+        BOOST_LOG(warning) << "Ignoring invalid active-window display request"sv;
+        return;
+      }
+
+      const auto display_index = video::active_window_display_index();
+      if (!display_index) {
+        BOOST_LOG(debug) << "Unable to resolve the display containing the active window"sv;
+        send_host_display_list(session);
+        return;
+      }
+
+      const auto displays = video::get_display_list();
+      if (displays.current_index != *display_index) {
+        if (!video::switch_display(*display_index)) {
+          BOOST_LOG(warning) << "Unable to switch to active-window display index "sv << *display_index;
+          return;
+        }
+        BOOST_LOG(info) << "Following active window to display index "sv << *display_index;
+      }
+      send_host_display_list(session);
+    });
+
     server->map(packetTypes[IDX_INPUT_DATA], [&](session_t *session, const std::string_view &payload) {
       BOOST_LOG(debug) << "type [IDX_INPUT_DATA]"sv;
 
@@ -1975,13 +1995,11 @@ namespace stream {
               session->video.cipher->encrypt(std::string_view {(char *) inspect, (size_t) blocksize}, prefix->tag, (uint8_t *) inspect, &iv);
             }
 
-            if (x - next_shard_to_send + 1 >= send_batch_size ||
-                x + 1 == shards.size()) {
+            if (x - next_shard_to_send + 1 >= send_batch_size || x + 1 == shards.size()) {
               // Do pacing within the frame.
               // Also trigger pacing before the first send_batch() of the frame
               // to account for the last send_batch() of the previous frame.
-              if (ratecontrol_group_packets_sent >= ratecontrol_packets_in_1ms ||
-                  ratecontrol_frame_packets_sent == 0) {
+              if (ratecontrol_group_packets_sent >= ratecontrol_packets_in_1ms || ratecontrol_frame_packets_sent == 0) {
                 auto due = ratecontrol_frame_start +
                            std::chrono::duration_cast<std::chrono::nanoseconds>(1ms) *
                              ratecontrol_frame_packets_sent / ratecontrol_packets_in_1ms;

@@ -28,7 +28,7 @@ typedef long NTSTATUS;
 /**
  * @brief Enumerates supported d3 DKMT GPU PREFERENCE QUERY STATE options.
  */
-typedef enum _D3DKMT_GPU_PREFERENCE_QUERY_STATE: DWORD {
+typedef enum _D3DKMT_GPU_PREFERENCE_QUERY_STATE : DWORD {
   D3DKMT_GPU_PREFERENCE_STATE_UNINITIALIZED,  ///< The GPU preference isn't initialized.
   D3DKMT_GPU_PREFERENCE_STATE_HIGH_PERFORMANCE,  ///< The highest performing GPU is preferred.
   D3DKMT_GPU_PREFERENCE_STATE_MINIMUM_POWER,  ///< The minimum-powered GPU is preferred.
@@ -1115,6 +1115,26 @@ namespace platf {
     }
 
     return display_names;
+  }
+
+  std::optional<std::string> active_window_display_name() {
+    const HWND foreground_window = GetForegroundWindow();
+    if (!foreground_window) {
+      return std::nullopt;
+    }
+
+    const HMONITOR monitor = MonitorFromWindow(foreground_window, MONITOR_DEFAULTTONEAREST);
+    if (!monitor) {
+      return std::nullopt;
+    }
+
+    MONITORINFOEXW monitor_info {};
+    monitor_info.cbSize = sizeof(monitor_info);
+    if (!GetMonitorInfoW(monitor, &monitor_info)) {
+      return std::nullopt;
+    }
+
+    return utf_utils::to_utf8(monitor_info.szDevice);
   }
 
   /**

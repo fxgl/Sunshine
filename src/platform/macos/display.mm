@@ -9,6 +9,10 @@
 #include <cmath>
 #include <optional>
 #include <string_view>
+#include <vector>
+
+// platform includes
+#import <AppKit/AppKit.h>
 
 // local includes
 #include "src/config.h"
@@ -303,6 +307,64 @@ namespace platf {
     }
 
     return display_names;
+  }
+
+  std::optional<std::string> active_window_display_name() {
+    const auto *frontmost_application = NSWorkspace.sharedWorkspace.frontmostApplication;
+    if (!frontmost_application) {
+      return std::nullopt;
+    }
+
+    const pid_t frontmost_pid = frontmost_application.processIdentifier;
+    const auto window_list = CGWindowListCopyWindowInfo(
+      kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements,
+      kCGNullWindowID
+    );
+    if (!window_list) {
+      return std::nullopt;
+    }
+
+    CGRect active_window_bounds = CGRectNull;
+    const CFIndex window_count = CFArrayGetCount(window_list);
+    for (CFIndex index = 0; index < window_count; ++index) {
+      const auto window = static_cast<CFDictionaryRef>(CFArrayGetValueAtIndex(window_list, index));
+      pid_t owner_pid {};
+      int layer {};
+      const auto owner = static_cast<CFNumberRef>(CFDictionaryGetValue(window, kCGWindowOwnerPID));
+      const auto window_layer = static_cast<CFNumberRef>(CFDictionaryGetValue(window, kCGWindowLayer));
+      const auto bounds = static_cast<CFDictionaryRef>(CFDictionaryGetValue(window, kCGWindowBounds));
+      if (!owner || !window_layer || !bounds || !CFNumberGetValue(owner, kCFNumberIntType, &owner_pid) || owner_pid != frontmost_pid || !CFNumberGetValue(window_layer, kCFNumberIntType, &layer) || layer != 0 || !CGRectMakeWithDictionaryRepresentation(bounds, &active_window_bounds) || CGRectIsEmpty(active_window_bounds)) {
+        continue;
+      }
+      break;
+    }
+    CFRelease(window_list);
+
+    if (CGRectIsNull(active_window_bounds) || CGRectIsEmpty(active_window_bounds)) {
+      return std::nullopt;
+    }
+
+    uint32_t display_count {};
+    if (CGGetActiveDisplayList(0, nullptr, &display_count) != kCGErrorSuccess || display_count == 0) {
+      return std::nullopt;
+    }
+    std::vector<CGDirectDisplayID> displays(display_count);
+    if (CGGetActiveDisplayList(display_count, displays.data(), &display_count) != kCGErrorSuccess) {
+      return std::nullopt;
+    }
+
+    CGDirectDisplayID best_display {};
+    double best_area {};
+    for (uint32_t index = 0; index < display_count; ++index) {
+      const CGRect intersection = CGRectIntersection(active_window_bounds, CGDisplayBounds(displays[index]));
+      const double area = CGRectIsNull(intersection) ? 0.0 : intersection.size.width * intersection.size.height;
+      if (area > best_area) {
+        best_area = area;
+        best_display = displays[index];
+      }
+    }
+
+    return best_area > 0.0 ? std::optional<std::string>(std::to_string(best_display)) : std::nullopt;
   }
 
   /**

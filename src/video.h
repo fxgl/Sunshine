@@ -6,6 +6,7 @@
 
 // standard includes
 #include <chrono>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -35,6 +36,22 @@ namespace video {
 
   /** Validate and enqueue a live display switch. */
   bool switch_display(int display_index);
+
+  /**
+   * @brief Find a display name in an enumerated capture list.
+   *
+   * @param display_names Capture display names.
+   * @param display_name Display name to locate.
+   * @return Zero-based display index, or no value when not present.
+   */
+  std::optional<int> find_display_index(const std::vector<std::string> &display_names, std::string_view display_name);
+
+  /**
+   * @brief Locate the display containing the platform foreground window.
+   *
+   * @return Zero-based capture display index, or no value when unavailable.
+   */
+  std::optional<int> active_window_display_index();
 
   /**
    * @brief Encoding configuration requested by a remote client.

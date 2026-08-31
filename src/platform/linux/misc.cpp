@@ -1241,6 +1241,10 @@ namespace platf {
     return {};
   }
 
+  std::optional<std::string> active_window_display_name() {
+    return std::nullopt;
+  }
+
   /**
    * @brief Report whether encoder backends should be probed again before streaming.
    *

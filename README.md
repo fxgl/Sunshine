@@ -35,6 +35,7 @@ This fork adds clipboard and text-input behavior for controlling a remote PC or 
 - **Focus-aware host-to-client transfer.** Sunshine snapshots the host clipboard when Moonlight gains focus. When Moonlight loses focus, Sunshine sends the current text only if it differs from that snapshot. There is no continuous polling or unsolicited clipboard broadcast.
 - **Origin tracking.** A clipboard write received from a Moonlight client updates that session's snapshot, so it is not reported back as a remote change.
 - **Unicode text input on macOS.** Text composed with the Moonlight client's keyboard layout can be injected without depending on the host keyboard layout.
+- **Active-window display following.** Matching Moonlight clients can request the capture display containing the foreground window, with native detection on macOS and Windows.
 
 Clipboard payloads are text-only and limited to 60 KiB. Host clipboard integration is currently implemented on **macOS and Windows**; unsupported platforms do not advertise the capability. The full feature set requires the matching fxgl Moonlight client and the pinned `moonlight-common-c` submodule.
 

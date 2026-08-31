@@ -298,8 +298,7 @@ const KeyCodeMap kKeyCodesMap[] = {
       key_map
     );
 
-    if (temp_map >= kKeyCodesMap + sizeof(kKeyCodesMap) / sizeof(kKeyCodesMap[0]) ||
-        temp_map->win_keycode != keycode || temp_map->mac_keycode == -1) {
+    if (temp_map >= kKeyCodesMap + sizeof(kKeyCodesMap) / sizeof(kKeyCodesMap[0]) || temp_map->win_keycode != keycode || temp_map->mac_keycode == -1) {
       return -1;
     }
 
@@ -837,7 +836,9 @@ const KeyCodeMap kKeyCodesMap[] = {
    * @return Capability flags.
    */
   platform_caps::caps_t get_capabilities() {
-    return platform_caps::clipboard_sync | platform_caps::keyboard_layout_sync;
+    return platform_caps::clipboard_sync |
+           platform_caps::keyboard_layout_sync |
+           platform_caps::active_window_display;
   }
 
   bool set_keyboard_layout(const keyboard_layout_t &layout) {
@@ -855,9 +856,7 @@ const KeyCodeMap kKeyCodesMap[] = {
       const auto source_type = static_cast<CFStringRef>(TISGetInputSourceProperty(source, kTISPropertyInputSourceType));
       const auto source_id = static_cast<CFStringRef>(TISGetInputSourceProperty(source, kTISPropertyInputSourceID));
       const auto languages = static_cast<CFArrayRef>(TISGetInputSourceProperty(source, kTISPropertyInputSourceLanguages));
-      if (!category || !CFEqual(category, kTISCategoryKeyboardInputSource) || !source_type ||
-          (!CFEqual(source_type, kTISTypeKeyboardLayout) && !CFEqual(source_type, kTISTypeKeyboardInputMode)) ||
-          !source_id || !languages) {
+      if (!category || !CFEqual(category, kTISCategoryKeyboardInputSource) || !source_type || (!CFEqual(source_type, kTISTypeKeyboardLayout) && !CFEqual(source_type, kTISTypeKeyboardInputMode)) || !source_id || !languages) {
         continue;
       }
 
