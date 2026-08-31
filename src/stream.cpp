@@ -4,6 +4,7 @@
  */
 
 // standard includes
+#include <atomic>
 #include <fstream>
 #include <future>
 #include <limits>
@@ -150,6 +151,15 @@ namespace stream {
     std::memcpy(&index, payload.data(), sizeof(index));
     index = util::endian::little(index);
     return index < display_count ? std::optional<std::uint16_t>(index) : std::nullopt;
+  }
+
+  std::optional<bool> parse_video_pause(std::string_view payload) {
+    if (payload.size() != sizeof(std::uint8_t)) {
+      return std::nullopt;
+    }
+
+    const auto state = static_cast<std::uint8_t>(payload.front());
+    return state <= 1 ? std::optional<bool>(state != 0) : std::nullopt;
   }
 
   /**
@@ -567,6 +577,9 @@ namespace stream {
 
       std::optional<crypto::cipher::gcm_t> cipher;
       std::uint64_t gcm_iv_counter;
+
+      std::atomic_bool paused {false};  ///< Whether encoded video frames should be withheld from the client.
+      std::atomic_bool resume_requires_idr {false};  ///< Whether packets must be dropped until an IDR frame arrives.
 
       safe::mail_raw_t::event_t<bool> idr_events;
       safe::mail_raw_t::event_t<std::pair<int64_t, int64_t>> invalidate_ref_frames_events;
@@ -1438,6 +1451,26 @@ namespace stream {
       send_host_display_list(session);
     });
 
+    server->map(SS_VIDEO_PAUSE_PTYPE, [&](session_t *session, const std::string_view &payload) {
+      const auto paused = parse_video_pause(payload);
+      if (!(session->config.mlFeatureFlags & ML_FF_VIDEO_PAUSE) || !paused) {
+        BOOST_LOG(warning) << "Ignoring invalid video pause request"sv;
+        return;
+      }
+
+      if (*paused) {
+        session->video.resume_requires_idr.store(true, std::memory_order_relaxed);
+        session->video.paused.store(true, std::memory_order_release);
+        BOOST_LOG(info) << "Pausing video transmission for inactive Moonlight window"sv;
+      } else {
+        const bool was_paused = session->video.paused.exchange(false, std::memory_order_acq_rel);
+        if (was_paused) {
+          session->video.idr_events->raise(true);
+          BOOST_LOG(info) << "Resuming video transmission with a fresh IDR frame"sv;
+        }
+      }
+    });
+
     server->map(packetTypes[IDX_INPUT_DATA], [&](session_t *session, const std::string_view &payload) {
       BOOST_LOG(debug) << "type [IDX_INPUT_DATA]"sv;
 
@@ -1782,6 +1815,15 @@ namespace stream {
       frame_network_latency_logger.first_point_now();
 
       auto session = (session_t *) packet->channel_data;
+      if (session->video.paused.load(std::memory_order_acquire)) {
+        continue;
+      }
+      if (session->video.resume_requires_idr.load(std::memory_order_relaxed)) {
+        if (!packet->is_idr()) {
+          continue;
+        }
+        session->video.resume_requires_idr.store(false, std::memory_order_relaxed);
+      }
       auto lowseq = session->video.lowseq;
 
       std::string_view payload {(char *) packet->data(), packet->data_size()};

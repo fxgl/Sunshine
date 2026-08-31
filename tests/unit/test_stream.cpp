@@ -78,6 +78,22 @@ TEST(HostDisplayControlTest, RejectsInvalidSwitch) {
   EXPECT_FALSE(stream::parse_host_display_switch(std::string_view("\0", 1), 2));
 }
 
+TEST(VideoPauseControlTest, ParsesValidStates) {
+  const char paused[] = {1};
+  const char resumed[] = {0};
+  ASSERT_TRUE(stream::parse_video_pause(std::string_view(paused, sizeof(paused))));
+  EXPECT_TRUE(*stream::parse_video_pause(std::string_view(paused, sizeof(paused))));
+  ASSERT_TRUE(stream::parse_video_pause(std::string_view(resumed, sizeof(resumed))));
+  EXPECT_FALSE(*stream::parse_video_pause(std::string_view(resumed, sizeof(resumed))));
+}
+
+TEST(VideoPauseControlTest, RejectsMalformedState) {
+  const char invalid[] = {2};
+  EXPECT_FALSE(stream::parse_video_pause({}));
+  EXPECT_FALSE(stream::parse_video_pause(std::string_view(invalid, sizeof(invalid))));
+  EXPECT_FALSE(stream::parse_video_pause(std::string_view("\0\0", 2)));
+}
+
 TEST(HostDisplayControlTest, FindsActiveWindowDisplay) {
   EXPECT_EQ(video::find_display_index({"Display A", "Display B"}, "Display B"), 1);
   EXPECT_FALSE(video::find_display_index({"Display A", "Display B"}, "Display C"));

@@ -5,8 +5,8 @@
 #pragma once
 
 // standard includes
-#include <utility>
 #include <string_view>
+#include <utility>
 
 // lib includes
 #include <boost/asio.hpp>
@@ -60,6 +60,14 @@ namespace stream {
 
   /** Validate and decode a requested host display index. */
   std::optional<std::uint16_t> parse_host_display_switch(std::string_view payload, std::size_t display_count);
+
+  /**
+   * @brief Validate and decode a video pause state payload.
+   *
+   * @param payload Raw one-byte SS_VIDEO_PAUSE_PTYPE payload.
+   * @return Pause state, or std::nullopt when the payload is malformed.
+   */
+  std::optional<bool> parse_video_pause(std::string_view payload);
 
   namespace session {
     /**
