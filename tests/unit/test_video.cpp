@@ -9,12 +9,36 @@
 #include <algorithm>
 #include <tuple>
 #include <utility>
+#include <vector>
+
+// lib includes
+#include <display_device/types.h>
 
 // local includes
 #include <src/config.h>
 #include <src/video.h>
 
 using namespace std::literals;
+
+TEST(VideoEncoderProbingTest, AllowsProbingWhenNoDevicesAreEnumerated) {
+  EXPECT_TRUE(video::allow_encoder_probing({}));
+}
+
+TEST(VideoEncoderProbingTest, AllowsProbingWithAnActiveDevice) {
+  std::vector<display_device::EnumeratedDevice> devices(2);
+  devices[1].m_info = display_device::EnumeratedDevice::Info {};
+  EXPECT_TRUE(video::allow_encoder_probing(devices));
+}
+
+TEST(VideoEncoderProbingTest, InactiveDevicesBlockProbingOnlyOnWindows) {
+  // A sleeping display enumerates without additional info, i.e. as inactive.
+  const std::vector<display_device::EnumeratedDevice> devices(2);
+#ifdef _WIN32
+  EXPECT_FALSE(video::allow_encoder_probing(devices));
+#else
+  EXPECT_TRUE(video::allow_encoder_probing(devices));
+#endif
+}
 
 struct EncoderTest: PlatformTestSuite, testing::WithParamInterface<video::encoder_t *> {
   void SetUp() override {
