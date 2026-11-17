@@ -157,8 +157,16 @@ include_directories(
         ${Boost_INCLUDE_DIRS}  # has to be the last, or we get runtime error on macOS ffmpeg encoder
 )
 
+if(APPLE)
+    # Link by absolute path: macos.cmake adds Homebrew's lib directory, which would
+    # otherwise resolve -lminiupnpc to Homebrew's dylib instead of the pkg-config prefix.
+    set(SUNSHINE_MINIUPNP_LIBRARIES ${MINIUPNP_LINK_LIBRARIES})
+else()
+    set(SUNSHINE_MINIUPNP_LIBRARIES ${MINIUPNP_LIBRARIES})
+endif()
+
 list(APPEND SUNSHINE_EXTERNAL_LIBRARIES
-        ${MINIUPNP_LIBRARIES}
+        ${SUNSHINE_MINIUPNP_LIBRARIES}
         ${CMAKE_THREAD_LIBS_INIT}
         enet
         libdisplaydevice::display_device
