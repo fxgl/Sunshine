@@ -10,6 +10,8 @@
 #include <string>
 #include <vector>
 
+#include <src/compat/moonlight.h>
+
 extern "C" {
 #include <moonlight-common-c/src/Input.h>
 #include <moonlight-common-c/src/Video.h>

@@ -15,11 +15,8 @@
 #include <openssl/err.h>
 #include <rs.h>
 
-extern "C" {
-  // clang-format off
-#include <moonlight-common-c/src/Limelight-internal.h>
-  // clang-format on
-}
+// Keep this separate so clang-format preserves the include order.
+#include "compat/moonlight.h"
 
 // local includes
 #include "config.h"
@@ -1885,7 +1882,7 @@ namespace stream {
       // D = 255 / (1 + F)
       // multiplied by 100 since F is the percentage as an integer:
       // D = (255 * 100) / (100 + F)
-      auto max_data_shards_per_fec_block = (DATA_SHARDS_MAX * 100) / (100 + fecPercentage);
+      auto max_data_shards_per_fec_block = (RS8_DATA_SHARDS_MAX * 100) / (100 + fecPercentage);
 
       // Compute the number of FEC blocks needed for this frame using the block size and max shards
       auto max_data_per_fec_block = max_data_shards_per_fec_block * blocksize;
