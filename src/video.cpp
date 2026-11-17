@@ -3284,6 +3284,15 @@ namespace video {
   }
 
   int probe_encoders() {
+#ifdef __APPLE__
+    // Wake sleeping displays once with a generous timeout: external monitors can take
+    // a few seconds, while the per-capture wake in platf::display() stays short so the
+    // many probe sessions don't stack waits.
+    if (!display_device::wake_display({}, 5s)) {
+      BOOST_LOG(warning) << "No display became active within 5s; encoder probing may fail"sv;
+    }
+#endif
+
     if (!allow_encoder_probing(display_device::enumerate_devices())) {
       // Error already logged
       return -1;
