@@ -4,7 +4,9 @@
  */
 
 // standard includes
+#include <algorithm>
 #include <atomic>
+#include <cstring>
 #include <fstream>
 #include <future>
 #include <limits>
@@ -157,6 +159,57 @@ namespace stream {
 
     const auto state = static_cast<std::uint8_t>(payload.front());
     return state <= 1 ? std::optional<bool>(state != 0) : std::nullopt;
+  }
+
+  std::optional<clipboard_image_chunk_t> parse_clipboard_image_chunk(const std::string_view packet) {
+    NV_INPUT_HEADER input_header;
+    SS_CLIPBOARD_IMAGE_CHUNK_HEADER chunk_header;
+    constexpr auto headers_size = sizeof(input_header) + sizeof(chunk_header);
+    if (packet.size() <= headers_size || packet.size() > headers_size + SS_CLIPBOARD_IMAGE_CHUNK_MAX_DATA) {
+      return std::nullopt;
+    }
+
+    std::memcpy(&input_header, packet.data(), sizeof(input_header));
+    std::memcpy(&chunk_header, packet.data() + sizeof(input_header), sizeof(chunk_header));
+    if (sizeof(input_header.size) + util::endian::big(input_header.size) != packet.size() ||
+        util::endian::little(input_header.magic) != SS_CLIPBOARD_IMAGE_CHUNK_EVENT_MAGIC ||
+        chunk_header.format != SS_CLIPBOARD_IMAGE_FORMAT_PNG) {
+      return std::nullopt;
+    }
+
+    const clipboard_image_chunk_t chunk {
+      util::endian::little(chunk_header.transferId),
+      util::endian::little(chunk_header.totalLength),
+      util::endian::little(chunk_header.offset),
+      packet.substr(headers_size),
+    };
+    if (chunk.total_length > LI_CLIPBOARD_IMAGE_MAX_SIZE || chunk.offset > chunk.total_length ||
+        chunk.data.size() > chunk.total_length - chunk.offset) {
+      return std::nullopt;
+    }
+    return chunk;
+  }
+
+  std::optional<std::string> clipboard_image_assembler_t::add(const clipboard_image_chunk_t &chunk) {
+    if (chunk.offset == 0) {
+      _transfer_id = chunk.transfer_id;
+      _total_length = chunk.total_length;
+      _data.clear();
+      _data.reserve(chunk.total_length);
+    } else if (chunk.transfer_id != _transfer_id) {
+      // Remainder of an abandoned transfer
+      return std::nullopt;
+    } else if (_data.empty() || chunk.total_length != _total_length || chunk.offset != _data.size()) {
+      // A chunk was lost
+      _data = {};
+      return std::nullopt;
+    }
+
+    _data.append(chunk.data);
+    if (_data.size() < _total_length) {
+      return std::nullopt;
+    }
+    return std::exchange(_data, {});
   }
 
   /**
@@ -617,6 +670,11 @@ namespace stream {
       safe::mail_raw_t::event_t<video::hdr_info_t> hdr_queue;
       std::optional<std::string> clipboard_focus_snapshot;  ///< Host clipboard captured when Moonlight gained focus.
       bool clipboard_focus_tracking {};  ///< Whether a focus interval is currently being tracked.
+      std::optional<std::uint64_t> clipboard_focus_change_count;  ///< Clipboard change count captured with the focus snapshot.
+      clipboard_image_assembler_t clipboard_image_incoming;  ///< Image being received from Moonlight.
+      std::string clipboard_image_outgoing;  ///< PNG being sent to Moonlight; empty when idle.
+      std::size_t clipboard_image_outgoing_offset {};  ///< Bytes of clipboard_image_outgoing already sent.
+      std::uint32_t clipboard_image_outgoing_id {};  ///< Transfer ID of clipboard_image_outgoing.
     } control;  ///< Runtime state for the encrypted GameStream control channel.
 
     std::uint32_t launch_session_id;  ///< RTSP launch-session ID associated with this stream.
@@ -1215,6 +1273,75 @@ namespace stream {
     return 0;
   }
 
+  /**
+   * @brief Whether clipboard image sync was negotiated with this client.
+   * @param session Active streaming session.
+   * @return True when both sides support it.
+   */
+  bool clipboard_image_sync_enabled(const session_t *session) {
+    return (session->config.mlFeatureFlags & ML_FF_CLIPBOARD_SYNC) &&
+           (session->config.mlFeatureFlags & ML_FF_CLIPBOARD_IMAGE_SYNC) &&
+           (platf::get_capabilities() & platf::platform_caps::clipboard_image_sync);
+  }
+
+  /**
+   * @brief Send the next chunk of a pending clipboard image.
+   *
+   * A chunk is queued only after ENet has transmitted the previous one, so other
+   * control messages wait behind at most one chunk.
+   *
+   * @param session Active streaming session.
+   * @return True while chunks remain to be sent.
+   */
+  bool send_clipboard_image_chunk(session_t *session) {
+    auto &control = session->control;
+    if (control.clipboard_image_outgoing.empty()) {
+      return false;
+    }
+    if (!control.peer) {
+      control.clipboard_image_outgoing = {};
+      return false;
+    }
+    if (!enet_list_empty(&control.peer->outgoingCommands) || !enet_list_empty(&control.peer->outgoingSendReliableCommands)) {
+      return true;
+    }
+
+    const auto &image = control.clipboard_image_outgoing;
+    const auto length = std::min<std::size_t>(image.size() - control.clipboard_image_outgoing_offset, SS_CLIPBOARD_IMAGE_CHUNK_MAX_DATA);
+
+    SS_CLIPBOARD_IMAGE_CHUNK_HEADER chunk {};
+    chunk.transferId = util::endian::little(control.clipboard_image_outgoing_id);
+    chunk.totalLength = util::endian::little(static_cast<std::uint32_t>(image.size()));
+    chunk.offset = util::endian::little(static_cast<std::uint32_t>(control.clipboard_image_outgoing_offset));
+    chunk.format = SS_CLIPBOARD_IMAGE_FORMAT_PNG;
+
+    std::string plaintext(sizeof(control_header_v2) + sizeof(chunk) + length, '\0');
+    auto *header = reinterpret_cast<control_header_v2 *>(plaintext.data());
+    header->type = util::endian::little<std::uint16_t>(SS_CLIPBOARD_IMAGE_CHUNK_PTYPE);
+    header->payloadLength = util::endian::little<std::uint16_t>(static_cast<std::uint16_t>(sizeof(chunk) + length));
+    std::memcpy(header->payload(), &chunk, sizeof(chunk));
+    std::memcpy(header->payload() + sizeof(chunk), image.data() + control.clipboard_image_outgoing_offset, length);
+
+    constexpr std::size_t max_plaintext_size = sizeof(control_header_v2) + sizeof(chunk) + SS_CLIPBOARD_IMAGE_CHUNK_MAX_DATA;
+    std::array<std::uint8_t, sizeof(control_encrypted_t) + crypto::cipher::round_to_pkcs7_padded(max_plaintext_size) + crypto::cipher::tag_size>
+      encrypted_payload;
+    const auto payload = encode_control(session, plaintext, encrypted_payload);
+    if (payload.empty() || session->broadcast_ref->control_server.send(payload, control.peer)) {
+      BOOST_LOG(warning) << "Couldn't send clipboard image to Moonlight client"sv;
+      control.clipboard_image_outgoing = {};
+      return false;
+    }
+
+    control.clipboard_image_outgoing_offset += length;
+    if (control.clipboard_image_outgoing_offset < image.size()) {
+      return true;
+    }
+
+    BOOST_LOG(info) << "Sent "sv << image.size() << " byte clipboard image to Moonlight client"sv;
+    control.clipboard_image_outgoing = {};
+    return false;
+  }
+
   int send_host_display_list(session_t *session) {
     if (!session->control.peer || !(session->config.mlFeatureFlags & ML_FF_LIVE_DISPLAY_SWITCH)) {
       return -1;
@@ -1270,6 +1397,36 @@ namespace stream {
         if (platf::set_clipboard_text(clipboard_text) && session->control.clipboard_focus_tracking) {
           // A clipboard write originating from this client is not a remote change.
           session->control.clipboard_focus_snapshot = std::move(clipboard_text);
+          session->control.clipboard_focus_change_count = platf::clipboard_change_count();
+        }
+        return;
+      }
+
+      if (magic == SS_CLIPBOARD_IMAGE_CHUNK_EVENT_MAGIC) {
+        if (!clipboard_image_sync_enabled(session)) {
+          return;
+        }
+
+        const auto chunk = parse_clipboard_image_chunk({reinterpret_cast<const char *>(input_data.data()), input_data.size()});
+        if (!chunk) {
+          BOOST_LOG(warning) << "Ignoring malformed clipboard image chunk"sv;
+          return;
+        }
+
+        const auto image = session->control.clipboard_image_incoming.add(*chunk);
+        if (!image) {
+          return;
+        }
+        if (!platf::set_clipboard_image_png(*image)) {
+          BOOST_LOG(warning) << "Unable to set "sv << image->size() << " byte clipboard image"sv;
+          return;
+        }
+
+        BOOST_LOG(info) << "Received "sv << image->size() << " byte clipboard image from Moonlight client"sv;
+        if (session->control.clipboard_focus_tracking) {
+          // A clipboard write originating from this client is not a remote change.
+          session->control.clipboard_focus_snapshot = platf::get_clipboard_text();
+          session->control.clipboard_focus_change_count = platf::clipboard_change_count();
         }
         return;
       }
@@ -1292,6 +1449,7 @@ namespace stream {
         }
         if (focus_packet->focused) {
           session->control.clipboard_focus_snapshot = platf::get_clipboard_text();
+          session->control.clipboard_focus_change_count = platf::clipboard_change_count();
           session->control.clipboard_focus_tracking = true;
           BOOST_LOG(debug) << "Captured host clipboard state when Moonlight gained focus"sv;
         } else {
@@ -1303,8 +1461,20 @@ namespace stream {
           auto clipboard_text = platf::get_clipboard_text();
           if (clipboard_text && clipboard_text->size() <= MAX_CLIPBOARD_TEXT_SIZE && clipboard_text != session->control.clipboard_focus_snapshot) {
             send_clipboard_text(session, *clipboard_text);
+          } else if (clipboard_image_sync_enabled(session)) {
+            // No new text; the clipboard may hold an image copied on the host instead.
+            const auto change_count = platf::clipboard_change_count();
+            if (change_count && change_count != session->control.clipboard_focus_change_count) {
+              if (auto image = platf::get_clipboard_image_png(LI_CLIPBOARD_IMAGE_MAX_SIZE)) {
+                BOOST_LOG(info) << "Sending "sv << image->size() << " byte clipboard image to Moonlight client"sv;
+                session->control.clipboard_image_outgoing = std::move(*image);
+                session->control.clipboard_image_outgoing_offset = 0;
+                ++session->control.clipboard_image_outgoing_id;
+              }
+            }
           }
           session->control.clipboard_focus_snapshot.reset();
+          session->control.clipboard_focus_change_count.reset();
         }
         return;
       }
@@ -1571,6 +1741,7 @@ namespace stream {
     auto broadcast_shutdown_event = mail::man->event<bool>(mail::broadcast_shutdown);
     while (!shutdown_event->peek() && !broadcast_shutdown_event->peek()) {
       bool has_session_awaiting_peer = false;
+      bool clipboard_image_pending = false;
 
       {
         auto lg = server->_sessions.lock();
@@ -1626,6 +1797,8 @@ namespace stream {
 
               send_hdr_mode(session, std::move(hdr_info));
             }
+
+            clipboard_image_pending |= send_clipboard_image_chunk(session);
           }
 
           ++pos;
@@ -1638,7 +1811,8 @@ namespace stream {
         break;
       }
 
-      server->iterate(150ms);
+      // Poll quickly while a clipboard image is being paced out chunk by chunk
+      server->iterate(clipboard_image_pending ? 1ms : 150ms);
     }
 
     // Let all remaining connections know the server is shutting down

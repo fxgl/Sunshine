@@ -5,6 +5,9 @@
 #pragma once
 
 // standard includes
+#include <cstdint>
+#include <optional>
+#include <string>
 #include <string_view>
 #include <utility>
 
@@ -68,6 +71,47 @@ namespace stream {
    * @return Pause state, or std::nullopt when the payload is malformed.
    */
   std::optional<bool> parse_video_pause(std::string_view payload);
+
+  /**
+   * @brief One chunk of a clipboard image transfer.
+   */
+  struct clipboard_image_chunk_t {
+    std::uint32_t transfer_id;  ///< Identifies the transfer the chunk belongs to.
+    std::uint32_t total_length;  ///< Size of the complete PNG in bytes.
+    std::uint32_t offset;  ///< Position of this chunk within the PNG.
+    std::string_view data;  ///< Chunk bytes; points into the parsed packet.
+  };
+
+  /**
+   * @brief Validate and decode an SS_CLIPBOARD_IMAGE_CHUNK_EVENT_MAGIC input packet.
+   *
+   * @param packet Complete input packet including its NV_INPUT_HEADER.
+   * @return Decoded chunk, or std::nullopt when the packet is malformed.
+   */
+  std::optional<clipboard_image_chunk_t> parse_clipboard_image_chunk(std::string_view packet);
+
+  /**
+   * @brief Reassembles chunked clipboard images received from Moonlight.
+   *
+   * Chunks must arrive in order. A chunk at offset 0 starts a new transfer and
+   * discards any partial one; chunks of other transfers are ignored, and a gap
+   * within the current transfer discards it.
+   */
+  class clipboard_image_assembler_t {
+  public:
+    /**
+     * @brief Add one chunk.
+     *
+     * @param chunk Validated chunk.
+     * @return Complete PNG when this chunk finishes the transfer.
+     */
+    std::optional<std::string> add(const clipboard_image_chunk_t &chunk);
+
+  private:
+    std::uint32_t _transfer_id {};  ///< Transfer being reassembled.
+    std::uint32_t _total_length {};  ///< Expected PNG size.
+    std::string _data;  ///< Bytes received so far; empty when idle.
+  };
 
   namespace session {
     /**

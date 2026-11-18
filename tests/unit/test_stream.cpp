@@ -96,6 +96,76 @@ TEST(VideoPauseControlTest, RejectsMalformedState) {
   EXPECT_FALSE(stream::parse_video_pause(std::string_view("\0\0", 2)));
 }
 
+namespace {
+  std::string clipboard_image_chunk_packet(std::uint32_t transfer_id, std::uint32_t total_length, std::uint32_t offset, std::string_view data) {
+    NV_INPUT_HEADER input_header {};
+    SS_CLIPBOARD_IMAGE_CHUNK_HEADER chunk_header {};
+    input_header.size = boost::endian::native_to_big(static_cast<std::uint32_t>(sizeof(input_header.magic) + sizeof(chunk_header) + data.size()));
+    input_header.magic = boost::endian::native_to_little(static_cast<std::uint32_t>(SS_CLIPBOARD_IMAGE_CHUNK_EVENT_MAGIC));
+    chunk_header.transferId = boost::endian::native_to_little(transfer_id);
+    chunk_header.totalLength = boost::endian::native_to_little(total_length);
+    chunk_header.offset = boost::endian::native_to_little(offset);
+    chunk_header.format = SS_CLIPBOARD_IMAGE_FORMAT_PNG;
+
+    std::string packet(reinterpret_cast<const char *>(&input_header), sizeof(input_header));
+    packet.append(reinterpret_cast<const char *>(&chunk_header), sizeof(chunk_header));
+    packet.append(data);
+    return packet;
+  }
+}  // namespace
+
+TEST(ClipboardImageChunkTest, ParsesValidChunk) {
+  const auto packet = clipboard_image_chunk_packet(7, 10, 4, "abcd");
+  const auto chunk = stream::parse_clipboard_image_chunk(packet);
+
+  ASSERT_TRUE(chunk);
+  EXPECT_EQ(chunk->transfer_id, 7u);
+  EXPECT_EQ(chunk->total_length, 10u);
+  EXPECT_EQ(chunk->offset, 4u);
+  EXPECT_EQ(chunk->data, "abcd");
+}
+
+TEST(ClipboardImageChunkTest, RejectsChunksOutsideTheImage) {
+  EXPECT_FALSE(stream::parse_clipboard_image_chunk(clipboard_image_chunk_packet(1, 10, 8, "abc")));
+  EXPECT_FALSE(stream::parse_clipboard_image_chunk(clipboard_image_chunk_packet(1, LI_CLIPBOARD_IMAGE_MAX_SIZE + 1, 0, "a")));
+  EXPECT_FALSE(stream::parse_clipboard_image_chunk(clipboard_image_chunk_packet(1, 10, 0, "")));
+
+  auto truncated = clipboard_image_chunk_packet(1, 10, 0, "abcd");
+  truncated.pop_back();
+  EXPECT_FALSE(stream::parse_clipboard_image_chunk(truncated));
+}
+
+TEST(ClipboardImageAssemblerTest, CompletesInOrderTransfer) {
+  stream::clipboard_image_assembler_t assembler;
+
+  EXPECT_FALSE(assembler.add({3, 6, 0, "abc"}));
+  const auto image = assembler.add({3, 6, 3, "def"});
+
+  ASSERT_TRUE(image);
+  EXPECT_EQ(*image, "abcdef");
+}
+
+TEST(ClipboardImageAssemblerTest, DropsTransferWithMissingChunk) {
+  stream::clipboard_image_assembler_t assembler;
+
+  EXPECT_FALSE(assembler.add({3, 9, 0, "abc"}));
+  EXPECT_FALSE(assembler.add({3, 9, 6, "ghi"}));
+  // The remainder of the abandoned transfer must not complete it
+  EXPECT_FALSE(assembler.add({3, 9, 3, "def"}));
+}
+
+TEST(ClipboardImageAssemblerTest, NewTransferReplacesPartialOne) {
+  stream::clipboard_image_assembler_t assembler;
+
+  EXPECT_FALSE(assembler.add({1, 6, 0, "old"}));
+  EXPECT_FALSE(assembler.add({2, 4, 0, "ne"}));
+  EXPECT_FALSE(assembler.add({1, 6, 3, "xyz"}));
+  const auto image = assembler.add({2, 4, 2, "wy"});
+
+  ASSERT_TRUE(image);
+  EXPECT_EQ(*image, "newy");
+}
+
 TEST(HostDisplayControlTest, FindsActiveWindowDisplay) {
   EXPECT_EQ(video::find_display_index({"Display A", "Display B"}, "Display B"), 1);
   EXPECT_FALSE(video::find_display_index({"Display A", "Display B"}, "Display C"));

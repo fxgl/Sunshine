@@ -837,6 +837,7 @@ const KeyCodeMap kKeyCodesMap[] = {
    */
   platform_caps::caps_t get_capabilities() {
     return platform_caps::clipboard_sync |
+           platform_caps::clipboard_image_sync |
            platform_caps::keyboard_layout_sync |
            platform_caps::active_window_display;
   }

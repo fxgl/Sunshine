@@ -396,6 +396,11 @@ namespace platf {
      * @brief Capability bit indicating active-window display detection support.
      */
     constexpr caps_t active_window_display = 0x40;
+    /**
+     * @brief Capability bit indicating PNG clipboard image synchronization support.
+     */
+    constexpr caps_t clipboard_image_sync = 0x100;
+    static_assert(clipboard_image_sync == LI_FF_CLIPBOARD_IMAGE_SYNC);
   };  // namespace platform_caps
 
   /**
@@ -1308,6 +1313,42 @@ namespace platf {
    * @return True when the clipboard was updated successfully.
    */
   bool set_clipboard_text(const std::string &text);
+
+#ifdef __APPLE__
+  /**
+   * @brief Get a counter that changes whenever any application modifies the clipboard.
+   * @return Change counter, or no value when the platform cannot report changes.
+   */
+  std::optional<std::uint64_t> clipboard_change_count();
+
+  /**
+   * @brief Read the clipboard image as PNG, converting other image formats if needed.
+   * @param max_size Largest PNG size to return.
+   * @return PNG bytes, or no value when there is no image or it exceeds max_size.
+   */
+  std::optional<std::string> get_clipboard_image_png(std::size_t max_size);
+
+  /**
+   * @brief Replace the system clipboard with a PNG image.
+   * @param png PNG bytes to publish.
+   * @return True when the clipboard was updated successfully.
+   */
+  bool set_clipboard_image_png(const std::string &png);
+#else
+  // Clipboard image sync is only implemented on macOS; platform_caps::clipboard_image_sync
+  // is never advertised elsewhere, so these are unreachable there.
+  inline std::optional<std::uint64_t> clipboard_change_count() {
+    return std::nullopt;
+  }
+
+  inline std::optional<std::string> get_clipboard_image_png(std::size_t) {
+    return std::nullopt;
+  }
+
+  inline bool set_clipboard_image_png(const std::string &) {
+    return false;
+  }
+#endif
 
   constexpr auto SERVICE_NAME = "Sunshine";  ///< mDNS service instance name advertised for GameStream discovery.
   constexpr auto SERVICE_TYPE = "_nvstream._tcp";  ///< mDNS service type advertised for GameStream discovery.
